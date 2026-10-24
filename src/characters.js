@@ -140,7 +140,7 @@ export class Character {
     this.model.position.set(body.pos.x, body.pos.y + (body.mode === 'swim' ? 1.0 : 0), body.pos.z);
     // models face +z by convention; we face -z
     this.model.rotation.y = this.heading + Math.PI;
-    const role = body.mode === 'swim' ? 'swim' : body.mode === 'climb' ? 'climb' : body.sitting ? 'sit'
+    const role = body.mode === 'swim' ? 'swim' : body.mode === 'climb' ? 'climb' : body.squat ? 'squat' : body.sitting ? 'sit'
       : speed > 3.3 ? 'run' : speed > 0.25 ? 'walk' : 'idle';
     const clipped = this.#play(role, role === 'run' ? speed / 4.2 : role === 'walk' ? speed / 1.5 : 1);
     if (clipped) this.mixer.update(dt);
@@ -254,7 +254,7 @@ class Rig {
   pose(dt, body, speed) {
     this.t += dt;
     // motion capture for standing, walking and running; procedural for sitting, swimming, climbing
-    const special = body.sitting || body.mode === 'swim' || body.mode === 'climb';
+    const special = body.sitting || body.squat || body.mode === 'swim' || body.mode === 'climb';
     const wantProc = !this.hasMocap || special ? 1 : 0;
     this.proc += (wantProc - this.proc) * Math.min(1, dt * 6);
     let hipsLift = 0;
@@ -292,7 +292,8 @@ class Rig {
     const run = THREE.MathUtils.clamp((speed - 3.2) / 1.3, 0, 1);
     const breathe = Math.sin(this.t * 1.7) * 0.02;
     this.sit += ((body.sitting ? 1 : 0) - this.sit) * Math.min(1, dt * 4);
-    const sit = this.sit;
+    this.sq = (this.sq || 0) + ((body.squat ? 1 : 0) - (this.sq || 0)) * Math.min(1, dt * 4);
+    const sit = this.sit, sq = this.sq;
     const armDown = 1.25;   // from T-pose to by-the-sides
     if (body.mode === 'swim') {
       const sw = Math.sin(ph * 1.5);
@@ -325,10 +326,20 @@ class Rig {
       R.RightForeArm = rx(-0.25 - run * 0.9 - sit * 0.5);
       R.Head = rx(-lean * 0.5 + Math.sin(this.t * 0.3) * 0.04);
     }
+    if (sq > 0.01) {
+      // squatting: thighs forward, shins folded under, leaning in with the hands on the knees
+      const mix = (n, q) => { R[n] = (R[n] || new THREE.Quaternion()).slerp(q, sq); };
+      mix('LeftUpLeg', rx(-1.8).multiply(rz(-0.28))); mix('RightUpLeg', rx(-1.8).multiply(rz(0.28)));
+      mix('LeftLeg', rx(2.45)); mix('RightLeg', rx(2.45));
+      mix('LeftFoot', rx(-0.55)); mix('RightFoot', rx(-0.55));
+      mix('Spine', rx(0.4)); mix('Head', rx(-0.3));
+      mix('LeftArm', rx(0.9).multiply(rz(-0.8))); mix('RightArm', rx(0.9).multiply(rz(0.8)));
+      mix('LeftForeArm', rx(-0.5)); mix('RightForeArm', rx(-0.5));
+    }
     this.#apply(R);
     // bob on each footfall; drop to the ground to sit
     const bob = (Math.abs(Math.cos(ph)) - 0.6) * 0.04 * k;
-    const procLift = bob - sit * this.hipsY * 0.5;
+    const procLift = bob - sit * this.hipsY * 0.5 - sq * this.hipsY * 0.58;
     return procLift * this.proc + hipsLift * this.hipsY * (1 - this.proc);
   }
 

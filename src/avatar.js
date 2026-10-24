@@ -89,7 +89,7 @@ export class Avatar {
       this.armL.rotation.x = 1.6 + Math.sin(phase * 1.5) * 1.2; this.armR.rotation.x = 1.6 - Math.sin(phase * 1.5) * 1.2;
       this.legL.rotation.x = Math.sin(phase * 2) * 0.4; this.legR.rotation.x = -Math.sin(phase * 2) * 0.4;
       this.torso.rotation.x = -1.1;
-    } else if (hiker.sitting) {
+    } else if (hiker.sitting || hiker.squat) {
       // sitting on the ground, knees up, leaning back on the hands
       this.legL.rotation.x = this.legR.rotation.x = -1.35;
       this.armL.rotation.x = this.armR.rotation.x = 0.5;

@@ -170,6 +170,21 @@ export class Audio {
     this.#burst(0.12, 90, 0.8, 0.3, 'lowpass', 0.01, this.noise);
   }
 
+  /** Something soft hitting the ground. */
+  plop() {
+    if (!this.ctx) return;
+    this.#burst(0.12, 160, 1.5, 0.35, 'lowpass', 0, this.noise);
+    this.#burst(0.05, 420, 2, 0.15, 'bandpass', 0.02);
+  }
+
+  /** Flies circling: `v` 0..1 by how close you are. */
+  buzz(v) {
+    if (!this.ctx) return;
+    const f = 190 + Math.random() * 90;
+    this.#burst(0.1, f, 9, 0.07 * v, 'bandpass');
+    this.#burst(0.08, f * 2.1, 8, 0.04 * v, 'bandpass', 0.01);
+  }
+
   /** A bubble popping up the percolator's stem. */
   perk() {
     if (!this.ctx) return;

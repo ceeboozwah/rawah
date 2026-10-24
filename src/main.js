@@ -30,6 +30,7 @@ import { Fishing } from './fishing.js';
 import { Roast } from './roast.js';
 import { Wood } from './wood.js';
 import { Coffee } from './coffee.js';
+import { Dump } from './dump.js';
 
 const SAVE_KEY = 'rawah-save-v2';
 const $ = (id) => document.getElementById(id);
@@ -122,6 +123,7 @@ const fishing = new Fishing(world, scene);
 const roast = new Roast(scene);
 const wood = new Wood(world, flora, scene);
 const coffee = new Coffee(world, scene);
+const dump = new Dump(scene, world);
 let coffeeBoost = 0;     // stamina from a sip, still working its way in
 const avatar = new Character(scene, settings.hero);
 const partner = new Character(scene, PARTNER);
@@ -1327,7 +1329,7 @@ function tick(dt, draw = true) {
   const wspd = 2 + Math.max(0, weather.wind) * 9;
   precip.update(state.paused ? 0 : dt, camera, weather, [WIND_DIR[0] * wspd, WIND_DIR[1] * wspd], precipLight.copy(sky.hemi.color).multiplyScalar(0.2 + sky.light * 0.75 + weather.flash));
   const tC = tempC(h, p.y);
-  grass.clear(camp.fire && [camp.fire.x, camp.fire.z, 1.9], camp.tent && [camp.tent.x, camp.tent.z, 3.0], ...wood.clearings(hiker.pos));
+  grass.clear(camp.fire && [camp.fire.x, camp.fire.z, 1.9], camp.tent && [camp.tent.x, camp.tent.z, 3.0], ...wood.clearings(hiker.pos), ...dump.clearings(hiker.pos));
   grass.update(camera, hiker, clamp((1.5 - tC) / 4, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0), calendar.cure);
   headlamp.intensity = state.lamp ? 60 : 0;
   lakes.uniforms.uSky.value.copy(sky.uniforms.uHorizon.value).lerp(sky.uniforms.uZenith.value, 0.3);
@@ -1349,7 +1351,12 @@ function tick(dt, draw = true) {
       companion.say('lose', { place: companion.target.name }, { force: true });
       companion.stance = 'together'; companion.activity = 'follow';
     }
-    for (const e of cEvents) if (e.type === 'race') hud.toast(`${companion.name} beat you to ${e.place}.`, 'warn');
+    for (const e of cEvents) {
+      if (e.type === 'race') hud.toast(`${companion.name} beat you to ${e.place}.`, 'warn');
+      else if (e.type === 'drop') dump.drop(e.x, e.y, e.z);
+    }
+    dump.update(state.paused ? 0 : dt, p);
+    for (const e of dump.events) audio[e.name]?.(e.v);
   }
   companion.drawBubble(camera, performance.now() / 1000);
   const brook = world.nearestStream(p.x, p.z);
@@ -1464,7 +1471,7 @@ if (DEV) {
     look(yaw, pitch = 0) { hiker.yaw = yaw; hiker.pitch = pitch; },
     press(code) { pressed.add(code); },
     map() { toggleMap(); },
-    gmap: map, companion, coffee, grass, horizon, CULL, atv, fishing, sky, roast, camp, wood, sitDown, standUp, smash, askSmash, answerAsk, startScene, mountATV, dismountATV,
+    gmap: map, companion, coffee, dump, grass, horizon, CULL, atv, fishing, sky, roast, camp, wood, sitDown, standUp, smash, askSmash, answerAsk, startScene, mountATV, dismountATV,
     travel(name) { if (!map.open) toggleMap(); const i = map.list.findIndex((d) => d.name === name); if (i >= 0) { map.pick(i); map.travel(); } return i; },
     hold(code, on = true) { if (on) keys.add(code); else keys.delete(code); },
     step(n = 1, dt = 1 / 60) { for (let i = 0; i < n; i++) tick(dt, i === n - 1); },

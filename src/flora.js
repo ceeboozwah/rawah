@@ -366,6 +366,24 @@ export class Flora {
     return best;
   }
 
+  /** Standing trees within r of (x, z): { x, z, rad }. Only the tiles around the point (those are loaded). */
+  treesAround(x, z, r) {
+    const out = [], [ti, tj] = this.tileKey(x, z);
+    for (let j = tj - 1; j <= tj + 1; j++) {
+      for (let i = ti - 1; i <= ti + 1; i++) {
+        const tile = this.tiles.get(j * this.nt + i);
+        if (!tile) continue;
+        for (const kind of CHOPPABLE) {
+          const list = tile.items[kind];
+          for (let k = 0; k < list.length; k += 5) {
+            if (Math.hypot(list[k] - x, list[k + 2] - z) <= r) out.push({ x: list[k], z: list[k + 2], rad: TRUNK_R[kind] * list[k + 3] });
+          }
+        }
+      }
+    }
+    return out;
+  }
+
   /** Take a tree out of the forest, leaving a stump. Returns what the falling tree needs. */
   fell(ref) {
     const list = ref.tile.items[ref.kind];

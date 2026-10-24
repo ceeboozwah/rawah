@@ -80,6 +80,9 @@ export class Companion {
     this.hangout = null;
     this.face = null;   // which way to look when standing
     this.cooldowns = {};
+    this.biz = null;       // a call of nature: { phase: walk | squat | done, ... }
+    this.urge = 100 + Math.random() * 70;   // seconds until the next one
+    this.squat = false;
     this.go = null;   // { x, z }: walk here and nowhere else (a scripted moment)
     this.boarding = false; this.boardT = 0; this.ride = false;   // hopping on the ATV / seated on it
     this.bubble = document.getElementById('bubble');
@@ -197,7 +200,7 @@ export class Companion {
   #decide(ctx) {
     const { player, playerSpeed, tent, fire, hour, weather } = ctx;
     const d = Math.hypot(player.x - this.pos.x, player.z - this.pos.z);
-    if (this.activity === 'race' || this.boarding || this.go) return;
+    if (this.activity === 'race' || this.boarding || this.go || this.biz) return;
     if (d > 260) { this.activity = 'catchup'; return; }
     // a fire with stools set out and you nearby: take the stool you aren't on
     if (ctx.fire && ctx.stools && Math.hypot(ctx.fire.x - player.x, ctx.fire.z - player.z) < 16 && this.stance !== 'free') {
@@ -244,6 +247,66 @@ export class Companion {
     this.activity = 'follow';
   }
 
+  /** A tree to duck behind: out of your line of sight, a walk from you and from camp, with room to squat. */
+  #coverSpot(ctx) {
+    const { player, fire, tent } = ctx, p = this.pos, w = this.world;
+    let best = null, bs = Infinity;
+    for (const t of this.flora.treesAround(p.x, p.z, 30)) {
+      let ux = t.x - player.x, uz = t.z - player.z;
+      const ud = Math.hypot(ux, uz);
+      if (ud < 5) continue;
+      ux /= ud; uz /= ud;
+      const x = t.x + ux * (t.rad + 0.9), z = t.z + uz * (t.rad + 0.9);
+      if (Math.hypot(x - player.x, z - player.z) < 7 || w.lakeAt(x, z) || w.localGrade(x, z) > 0.45) continue;
+      if (fire && Math.hypot(x - fire.x, z - fire.z) < 7) continue;
+      if (tent && Math.hypot(x - tent.x, z - tent.z) < 6) continue;
+      if (this.flora.collide({ x, z }, 0.4, Infinity) > -Infinity) continue;
+      const s = Math.hypot(x - p.x, z - p.z) + (ud < 12 ? 10 : 0) + Math.random() * 3;
+      if (s < bs) { bs = s; best = { x, z, yaw: Math.atan2(uz, -ux), fx: -uz, fz: ux }; }
+    }
+    return best;
+  }
+
+  /** A call of nature: walk behind a tree, squat there for a while (dropping what falls), and go back. */
+  #business(dt, ctx, d) {
+    const p = this.pos;
+    if (!this.biz) {
+      this.squat = false;
+      this.urge -= dt;
+      if (this.urge > 0) return;
+      const free = this.activity !== 'race' && !this.boarding && !this.go && !this.ride && this.mode === 'walk' && !ctx.atv.riding && d < 70;
+      if (!free) { this.urge = 15; return; }
+      const spot = this.#coverSpot(ctx);
+      if (!spot) { this.urge = 40; return; }
+      this.biz = { phase: 'walk', t: 0, ...spot };
+      this.speak(pick(['Nature calls. Back in a minute.', 'Need a tree. Do not follow me.', 'Be right back. Do not look.']));
+      return;
+    }
+    const b = this.biz;
+    b.t += dt;
+    if (this.activity === 'race' || this.boarding || this.go || this.ride || d > 120) { this.biz = null; this.squat = false; this.urge = 60; return; }
+    if (b.phase === 'walk') {
+      if (Math.hypot(b.x - p.x, b.z - p.z) < 0.45) {
+        b.phase = 'squat'; b.t = 0; b.n = 0;
+        b.drops = [3 + Math.random(), 5 + Math.random(), 7 + Math.random()].slice(0, 2 + (Math.random() < 0.6 ? 1 : 0));
+      } else if (b.t > 45) { this.biz = null; this.urge = 40; }
+    } else if (b.phase === 'squat') {
+      this.squat = true;
+      if (b.n < b.drops.length && b.t > b.drops[b.n]) {
+        b.n++;
+        ctx.events.push({ type: 'drop', x: p.x - b.fx * 0.2, y: p.y + 0.42, z: p.z - b.fz * 0.2 });
+      }
+      if (b.t > b.drops[b.drops.length - 1] + 2.2) {
+        b.phase = 'done'; b.t = 0; this.squat = false;
+        this.speak(pick(['Ahh. Much better.', 'Do not go over there.', 'I feel ten pounds lighter.']));
+      }
+    } else if (b.t > 1.8) {
+      this.biz = null;
+      this.urge = 300 + Math.random() * 240;
+      this.activity = 'follow';
+    }
+  }
+
   /** A nearby place worth a look: higher ground with a view, or a lakeshore. */
   #interesting(player) {
     const w = this.world;
@@ -267,6 +330,7 @@ export class Companion {
   #goal(ctx) {
     const { player, playerYaw, playerSpeed } = ctx;
     if (this.go) return { x: this.go.x, z: this.go.z, near: 0.3 };
+    if (this.biz) return this.biz.phase === 'walk' ? { x: this.biz.x, z: this.biz.z, near: 0.3 } : null;
     if (this.boarding) {
       const a = ctx.atv, s = Math.sin(a.yaw), c = Math.cos(a.yaw);
       return { x: a.pos.x + s * 1.7, z: a.pos.z + c * 1.7, near: 0.4 };
@@ -320,6 +384,8 @@ export class Companion {
       this.say('catchup', {}, { cool: 60 });
     }
 
+    this.#business(dt, ctx, d);
+
     this.think -= dt;
     if (this.think <= 0) { this.think = 1.5 + Math.random(); this.#decide(ctx); }
 
@@ -367,7 +433,7 @@ export class Companion {
     if (this.activity === 'camp' && this.target?.stool && Math.hypot(this.target.x - p.x, this.target.z - p.z) < 0.7 && speed === 0) {
       p.x = this.target.x; p.z = this.target.z;   // settle onto the stool
     }
-    this.sitting = (!goal && this.activity === 'sit') || (this.activity === 'camp' && speed === 0);
+    this.sitting = !this.biz && (!goal && this.activity === 'sit') || (this.activity === 'camp' && speed === 0);
     if (this.activity === 'race' && goal && Math.hypot(goal.x - p.x, goal.z - p.z) < 8) {
       // they got there first
       this.say('win', { place: this.target.name }, { force: true });
@@ -419,8 +485,8 @@ export class Companion {
     }
     // standing: look at you while talking, otherwise at the view
     const now = performance.now() / 1000;
-    this.talking = this.line && now < this.lineUntil && d < 25 ? 'nod' : null;
-    this.face = this.talking ? Math.atan2(-(player.x - p.x), -(player.z - p.z)) : this.hangout ? this.hangout.face : (this.activity === 'camp' && this.target?.stool ? this.target.yaw : null);
+    this.talking = this.line && now < this.lineUntil && d < 25 && !this.biz ? 'nod' : null;
+    this.face = this.biz?.phase === 'squat' ? this.biz.yaw : this.talking ? Math.atan2(-(player.x - p.x), -(player.z - p.z)) : this.hangout ? this.hangout.face : (this.activity === 'camp' && this.target?.stool ? this.target.yaw : null);
     this.char.update(dt, this);
   }
 
