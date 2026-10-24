@@ -165,6 +165,7 @@ export class Input {
         <button data-code="KeyQ">Roast</button>
         <button data-code="KeyX" data-hold>Chop</button>
         <button data-code="KeyB">Drop</button>
+        <button data-code="KeyH">Sip</button>
         <button data-code="KeyG">Pal</button>
         <button data-code="KeyL">Lamp</button>
         <button data-code="KeyV">Cam</button>

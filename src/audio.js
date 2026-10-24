@@ -170,6 +170,41 @@ export class Audio {
     this.#burst(0.12, 90, 0.8, 0.3, 'lowpass', 0.01, this.noise);
   }
 
+  /** A bubble popping up the percolator's stem. */
+  perk() {
+    if (!this.ctx) return;
+    const f = 380 + Math.random() * 380;
+    this.#burst(0.05, f, 4, 0.22, 'bandpass');
+    this.#burst(0.04, f * 1.5, 5, 0.12, 'bandpass', 0.045);
+  }
+
+  /** Coffee poured into a cup. */
+  pour() {
+    if (!this.ctx) return;
+    for (let i = 0; i < 7; i++) this.#burst(0.1, 900 + i * 90, 2.5, 0.07, 'bandpass', i * 0.09);
+  }
+
+  /** The pot lid going on. */
+  lid() {
+    if (!this.ctx) return;
+    this.#burst(0.05, 2600, 3, 0.2, 'bandpass');
+    this.#burst(0.08, 1700, 4, 0.15, 'bandpass', 0.05);
+  }
+
+  /** The percolator is done: two bright notes. */
+  ready() {
+    if (!this.ctx) return;
+    this.#whistle(1175, 1175, 0, 0.9, 0.22);
+    this.#whistle(1568, 1568, 0.22, 1.1, 0.2);
+  }
+
+  /** A sip. */
+  sip() {
+    if (!this.ctx) return;
+    this.#burst(0.18, 700, 1.5, 0.12, 'bandpass', 0.05);
+    this.#burst(0.12, 200, 1, 0.2, 'lowpass', 0.3, this.noise);
+  }
+
   thud(big) {
     if (!this.ctx) return;
     this.#burst(big ? 0.45 : 0.2, 160, 0.8, big ? 0.7 : 0.35, 'lowpass', 0, this.noise);
