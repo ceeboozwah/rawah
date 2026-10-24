@@ -116,6 +116,7 @@ export class Coffee {
   constructor(world, scene) {
     this.world = world;
     this.scene = scene;
+    this.rigged = false;      // grate and pot set up over the fire
     this.pot = { mode: 'idle', brew: 0, left: 0, heat: 0 };   // idle | brewing | ready (left: sips still in the pot)
     this.cup = { sips: 0, heat: 0 };
     this.events = [];
@@ -183,6 +184,18 @@ export class Coffee {
     return d < 0.8 || (dx * fx + dz * fz) / (d || 1) > 0.6 ? d : Infinity;
   }
 
+  /** [K] near the fire: the logs come off, the grate goes over it and a pot of coffee goes on. */
+  rig(fire, p) {
+    if (!fire) { this.#toast('Light a campfire first: [F].'); return false; }
+    if (this.rigged) { this.#toast('The coffee pot is already on the fire.'); return false; }
+    if (Math.hypot(fire.x - p.x, fire.z - p.z) > 4.5) { this.#toast('Get closer to the fire.'); return false; }
+    this.rigged = true;
+    this.#sound('lid');
+    if (this.pot.mode === 'idle') { this.pot.mode = 'brewing'; this.pot.brew = 0; this.pot.left = 0; this.#toast('Grate and percolator on the fire. It will chime when the coffee is done.'); }
+    else this.#toast('Grate and percolator back on the fire.');
+    return true;
+  }
+
   /** [R] at the pot: start a brew, check it, or pour what is ready into the tumbler. */
   interact(p) {
     const pot = this.pot;
@@ -215,8 +228,9 @@ export class Coffee {
     this.events.length = 0;
     const { fire, p } = ctx, pot = this.pot;
     const was = this.stand.visible;
-    this.stand.visible = !!fire;
-    if (fire && (!was || !this.at || this.at.x !== fire.x || this.at.z !== fire.z)) this.#place(fire, ctx.tent);
+    if (!fire && this.rigged) { this.rigged = false; if (pot.mode === 'brewing') { pot.mode = 'idle'; pot.brew = 0; } }
+    this.stand.visible = !!fire && this.rigged;
+    if (this.stand.visible && (!was || !this.at || this.at.x !== fire.x || this.at.z !== fire.z)) this.#place(fire, ctx.tent);
 
     // cooling: a pot off the fire loses its heat; a thermos holds on to it much longer
     const min = ctx.minutes || 0;
@@ -344,7 +358,12 @@ export class Coffee {
   }
 
   #hint(ctx) {
-    const d = this.reach(ctx.p, ctx.yaw), pot = this.pot;
+    const pot = this.pot;
+    if (ctx.fire && !this.rigged) {
+      this.hint = !ctx.seated && Math.hypot(ctx.fire.x - ctx.p.x, ctx.fire.z - ctx.p.z) < 3.8 ? '[K] make coffee  ·  [Q] roast a marshmallow' : '';
+      return;
+    }
+    const d = this.reach(ctx.p, ctx.yaw);
     const sipTip = this.cup.sips > 0 ? `  ·  [H] sip (${this.cup.sips})` : '';
     if (d === Infinity || ctx.seated) { this.hint = ''; return; }
     this.hint = pot.mode === 'idle' ? `[R] brew a pot of coffee${sipTip}`
@@ -352,10 +371,11 @@ export class Coffee {
         : this.cup.sips >= CAP ? `Your thermos is full${sipTip}` : `[R] pour coffee into your thermos${sipTip}`;
   }
 
-  save() { return { pot: { ...this.pot }, cup: { ...this.cup } }; }
+  save() { return { pot: { ...this.pot }, cup: { ...this.cup }, rigged: this.rigged }; }
 
   load(s) {
     if (!s) return;
     Object.assign(this.pot, s.pot); Object.assign(this.cup, s.cup);
+    this.rigged = !!s.rigged;
   }
 }

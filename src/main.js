@@ -390,7 +390,7 @@ function renderControls(el) {
   el.innerHTML = [
     col('Keyboard &amp; mouse', [[k('W') + k('A') + k('S') + k('D'), 'Walk'], ['Mouse', 'Look'], [k('Shift'), 'Hike fast'], [k('Space'), 'Hop'],
       [k('E'), 'Grab rock / let go'], [k('C'), 'Pitch / pack tent'], [k('F'), 'Campfire'], [k('Z'), 'Sleep at tent · hold to rest'],
-      [k('L'), 'Headlamp'], [k('G'), 'Do something together'], [k('R'), 'Ride the ATV / get off'], [k('T'), 'Cast a line / reel in'], [k('X'), 'Chop a tree / saw a log (hold)'], [k('B'), 'Drop your firewood'], [k('H'), 'Sip your coffee'], [k('R'), 'Sit on a stool · take or stack firewood'], [k('Q'), 'Roast a marshmallow / eat it'], [k('V'), 'First / third person'], [k('M'), 'Map &amp; quick travel'], [k('Esc'), 'Pause']]),
+      [k('L'), 'Headlamp'], [k('G'), 'Do something together'], [k('R'), 'Ride the ATV / get off'], [k('T'), 'Cast a line / reel in'], [k('X'), 'Chop a tree / saw a log (hold)'], [k('B'), 'Drop your firewood'], [k('K'), 'Make coffee at the fire'], [k('H'), 'Sip your coffee'], [k('R'), 'Sit on a stool · take or stack firewood'], [k('Q'), 'Roast a marshmallow / eat it'], [k('V'), 'First / third person'], [k('M'), 'Map &amp; quick travel'], [k('Esc'), 'Pause']]),
     col('Xbox controller', [[p('LS'), 'Walk'], [p('RS'), 'Look'], [p('RT'), 'Hike fast'], [p('A', 'a'), 'Hop'], [p('B', 'b'), 'Grab rock / let go'],
       [p('X', 'x'), 'Pitch / pack tent'], [p('RB'), 'Campfire'], [p('LT'), 'Rest / sleep'], [p('LB'), 'Headlamp'], [p('↑'), 'Do something together'], [p('↓'), 'Cast a line / reel in'], [p('←'), 'Roast a marshmallow / eat it, or sip coffee away from the fire'], [p('→'), 'Chop / saw (hold)'], [p('L3'), 'Drop your firewood'], [p('Y', 'y'), 'Ride / get off the ATV'], [p('R3'), 'Camera'],
       [p('View'), 'Map &amp; quick travel'], [p('Menu'), 'Pause · menus: D-pad, ' + p('A', 'a') + ' ' + p('B', 'b')]]),
@@ -1194,6 +1194,7 @@ function tick(dt, draw = true) {
       else if (dAtv < Infinity && hiker.mode === 'walk' && hiker.grounded) mountATV();
     }
     if (pressed.has('KeyQ') && !atv.riding && !fishing.busy && !state.cut) marshmallow();
+    if (pressed.has('KeyK') && !atv.riding && !fishing.busy && !state.cut && state.seat < 0 && hiker.mode === 'walk' && coffee.rig(camp.fire, hiker.pos)) save();
     if (pressed.has('KeyH') && !atv.riding && !fishing.busy && !state.cut && hiker.mode === 'walk' && !state.sleeping) coffee.sip();
     if (pressed.has('KeyB') && !atv.riding && state.seat < 0 && !fishing.busy && !state.cut && wood.drop({ pos: hiker.pos, yaw: hiker.yaw }, rig.mode === 'first' ? hiker.yaw : avatar.heading)) save();
     if (state.cut || fishing.locked) { /* hands full */ } else if (atv.riding || state.seat >= 0) { if (pressed.has('KeyL')) { state.lamp = !state.lamp; audio.step('rock', 0); } state.resting = false; } else act();
@@ -1242,6 +1243,7 @@ function tick(dt, draw = true) {
       fire: camp.fire, tent: camp.tent, p: hiker.pos, yaw: hiker.yaw, heading: state.seat >= 0 ? camp.stools[state.seat].yaw : (rig.mode === 'first' ? hiker.yaw : avatar.heading),
       first: rig.mode === 'first', camera, seated: state.seat >= 0, minutes: state.paused ? 0 : gameMin,
     });
+    camp.fireObj.setTeepee(!coffee.rigged);
     for (const e of coffee.events) {
       if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
       else if (e.type === 'sound') audio[e.name]?.();
