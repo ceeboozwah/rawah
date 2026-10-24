@@ -451,9 +451,10 @@ export class Companion {
     p.z += this.vel.z * dt;
     const lim = w.half - 40;
     p.x = clamp(p.x, -lim, lim); p.z = clamp(p.z, -lim, lim);
+    this.solids?.(p, 0.28);
     const lift = this.flora.collide(p, 0.3, p.y);
     const lake = w.lakeAt(p.x, p.z);
-    const ground = Math.max(w.height(p.x, p.z), lift, lake && lake.level >= w.iceLine ? lake.level : -Infinity);
+    const ground = Math.max(w.height(p.x, p.z), lift, this.floorAt ? this.floorAt(p.x, p.z) : -Infinity, lake && lake.level >= w.iceLine ? lake.level : -Infinity);
     const depth = lake && lake.level < w.iceLine ? lake.level - ground : 0;
     this.mode = depth > SWIM_DEPTH ? 'swim' : 'walk';
     p.y = this.mode === 'swim' ? lake.level - SWIM_DEPTH : ground;

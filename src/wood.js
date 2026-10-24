@@ -145,7 +145,8 @@ export class Wood {
   setCamp(tent) {
     if (!tent) { this.pile = null; this.#drawPile(); return; }
     const dir = new THREE.Vector3(Math.sin(tent.yaw), 0, Math.cos(tent.yaw)), side = new THREE.Vector3(Math.cos(tent.yaw), 0, -Math.sin(tent.yaw));
-    const origin = new THREE.Vector3(tent.x + side.x * 2.4 + dir.x * 0.4, 0, tent.z + side.z * 2.4 + dir.z * 0.4);
+    const off = tent.kind === 'family' ? 3.1 : 2.4;
+    const origin = new THREE.Vector3(tent.x + side.x * off + dir.x * 0.4, 0, tent.z + side.z * off + dir.z * 0.4);
     this.pile = { origin, dir, side, gy: this.world.height(origin.x, origin.z) };
     this.#drawPile();
   }

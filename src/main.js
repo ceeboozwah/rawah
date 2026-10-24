@@ -46,6 +46,7 @@ const QUALITY = resolveQuality(settings.quality);
 const Q = PRESETS[QUALITY];
 settings.shadows ??= Q.shadows;
 if (!MOONS[settings.moon]) settings.moon = 'new';
+if (settings.tent !== 'family') settings.tent = 'solo';
 setRangeK(Q.rangeK);
 
 // ------------------------------------------------------------------ renderer
@@ -138,6 +139,8 @@ await Promise.all([avatar.load(), partner.load()]);
 if (settings.view === 'third' && rig.mode === 'first') rig.toggle();
 avatar.setFirstPerson(rig.mode === 'first');
 const companion = new Companion(world, flora, partner, CHARACTERS[PARTNER].name);
+for (const b of [hiker, companion, atv]) b.solids = (p, r) => camp.collide(p, r);   // the family tent's walls
+for (const b of [hiker, companion]) b.floorAt = (x, z) => camp.floorAt(x, z);
 setLoad(0.85, 'Drawing the map…');
 await frame();
 map.build(world.colorImage);
@@ -519,6 +522,8 @@ $('set-weather').onchange = () => {
   weather.settle(state.day, state.hour);
   storeJSON('rawah-settings', settings);
 };
+$('set-tent').value = settings.tent;
+$('set-tent').onchange = () => { settings.tent = $('set-tent').value; storeJSON('rawah-settings', settings); hud.toast(settings.tent === 'family' ? 'Next camp: the family tent for six. Needs level ground.' : 'Next camp: the backpacking tent.'); };
 $('set-moon').value = settings.moon;
 $('set-moon').onchange = () => { settings.moon = $('set-moon').value; sky.moon = MOONS[settings.moon]; storeJSON('rawah-settings', settings); };
 // one button between night and day: night goes to 10:15 pm, and back returns to the hour you left
@@ -595,17 +600,18 @@ function act() {
     } else if (hiker.mode !== 'walk' || !hiker.grounded) {
       hud.toast('Find solid ground first.');
     } else {
-      const x = p.x + fx * 3, z = p.z + fz * 3;
-      const why = camp.campProblem(x, z);
+      const family = settings.tent === 'family', ahead = family ? 5.0 : 3;
+      const x = p.x + fx * ahead, z = p.z + fz * ahead;
+      const why = camp.campProblem(x, z, settings.tent, Math.atan2(-fx, -fz));
       if (why) hud.toast(why, 'warn');
       else {
         if (camp.tent) hud.toast('You packed up your old camp and moved it here.');
         camp.strike();
-        camp.pitch(x, z, Math.atan2(-fx, -fz));
+        camp.pitch(x, z, Math.atan2(-fx, -fz), settings.tent);
         wood.setCamp(camp.tent);
         companion.event('camp');
         audio.zip();
-        hud.toast('Tent pitched. [Z] near the tent to sleep.');
+        hud.toast(family ? 'Family tent up: walk in through the screen porch. [Z] inside to sleep.' : 'Tent pitched. [Z] near the tent to sleep.');
         save();
       }
     }
@@ -740,7 +746,7 @@ function startScene() {
   const t = camp.tent;
   standUp(); roast.drop(); fishing.cancel();
   const dx = Math.sin(t.yaw), dz = Math.cos(t.yaw), sx = Math.cos(t.yaw), sz = -Math.sin(t.yaw);   // out of the door, and across it
-  const door = (side) => ({ x: t.x + dx * 1.45 + sx * side * 0.3, z: t.z + dz * 1.45 + sz * side * 0.3 });
+  const door = (side) => ({ x: t.x + dx * camp.doorDist + sx * side * 0.3, z: t.z + dz * camp.doorDist + sz * side * 0.3 });
   state.cut = { phase: 'walk', t: 0, a: door(1), b: door(-1), view: rig.mode };
   companion.go = state.cut.b;
   companion.sitting = false;
@@ -947,7 +953,7 @@ function landing(d) {
   }
   if (d.kind === 'tent') {
     const t = camp.tent;
-    return { x: t.x + Math.sin(t.yaw) * 2.5, z: t.z + Math.cos(t.yaw) * 2.5, yaw: t.yaw };
+    return { x: t.x + Math.sin(t.yaw) * (camp.doorDist + 1.05), z: t.z + Math.cos(t.yaw) * (camp.doorDist + 1.05), yaw: t.yaw };
   }
   if (d.kind === 'peak') {
     let bx = d.x, bz = d.z, bh = -Infinity;
@@ -1250,6 +1256,7 @@ function tick(dt, draw = true) {
       first: rig.mode === 'first', camera, seated: state.seat >= 0, minutes: state.paused ? 0 : gameMin,
     });
     camp.fireObj.setTeepee(!coffee.rigged);
+    camp.lantern(sky.light < 0.4, hiker.pos);
     breakfast.update(state.paused ? 0 : dt, { on: coffee.rigged && !!camp.fire, fire: camp.fire, p: hiker.pos, yaw: hiker.yaw, seated: state.seat >= 0, coffeeReach: coffee.reach(hiker.pos, hiker.yaw) });
     for (const e of breakfast.events) {
       if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
@@ -1349,7 +1356,7 @@ function tick(dt, draw = true) {
   const wspd = 2 + Math.max(0, weather.wind) * 9;
   precip.update(state.paused ? 0 : dt, camera, weather, [WIND_DIR[0] * wspd, WIND_DIR[1] * wspd], precipLight.copy(sky.hemi.color).multiplyScalar(0.2 + sky.light * 0.75 + weather.flash));
   const tC = tempC(h, p.y);
-  grass.clear(camp.fire && [camp.fire.x, camp.fire.z, 1.9], camp.tent && [camp.tent.x, camp.tent.z, 3.0], ...wood.clearings(hiker.pos), ...dump.clearings(hiker.pos));
+  grass.clear(camp.fire && [camp.fire.x, camp.fire.z, 1.9], camp.tent && (camp.tent.kind === 'family' ? [camp.tent.x - Math.sin(camp.tent.yaw) * 3.3, camp.tent.z - Math.cos(camp.tent.yaw) * 3.3, camp.tent.x + Math.sin(camp.tent.yaw) * 3.6, camp.tent.z + Math.cos(camp.tent.yaw) * 3.6, 2.3] : [camp.tent.x, camp.tent.z, 3.0]), ...wood.clearings(hiker.pos), ...dump.clearings(hiker.pos));
   grass.update(camera, hiker, clamp((1.5 - tC) / 4, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0), calendar.cure);
   headlamp.intensity = state.lamp ? 60 : 0;
   lakes.uniforms.uSky.value.copy(sky.uniforms.uHorizon.value).lerp(sky.uniforms.uZenith.value, 0.3);
