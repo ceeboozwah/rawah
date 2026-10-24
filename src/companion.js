@@ -42,6 +42,13 @@ const LINES = {
   lose: ['Okay, okay. You win. {place} is yours.', 'Fine, you\'re faster. I\'m cooking.'],
   catchup: ['Wait up!', 'Hold on, coming!'],
   travel: ['Made it.', 'Whoa, okay, we\'re here.'],
+  hop: ['Wait for me!', 'Room for one more?', 'Hold on, I\'m coming!'],
+  ride: ['Okay, I\'m on. Go easy!', 'Let\'s ride!', 'Holding on!'],
+  fast: ['Faster!', 'Woooo!', 'Watch the trees!', 'I can\'t feel my face!'],
+  fish: ['Nice one!', 'Look at the size of that!', 'Beautiful fish. Now I\'m jealous.', 'Dinner!'],
+  smore: ['That is the perfect marshmallow. Don\'t look at mine.', 'Okay, golden brown. I am a professional.', 'Best thing I\'ve ever tasted, honestly.', 'Mine is on fire. Mine is definitely on fire.'],
+  sit: ['Good spot. Look at those stars.', 'Fire\'s perfect. Stay a while.', 'I could sit here all night.'],
+  off: ['Whew. That was fun.', 'My legs are still shaking.', 'Again later?'],
 };
 
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
@@ -73,6 +80,8 @@ export class Companion {
     this.hangout = null;
     this.face = null;   // which way to look when standing
     this.cooldowns = {};
+    this.go = null;   // { x, z }: walk here and nowhere else (a scripted moment)
+    this.boarding = false; this.boardT = 0; this.ride = false;   // hopping on the ATV / seated on it
     this.bubble = document.getElementById('bubble');
     this._v = new THREE.Vector3();
   }
@@ -109,10 +118,18 @@ export class Companion {
     return true;
   }
 
+  /** Say exactly this, now. */
+  speak(text, cool = 0) {
+    const now = performance.now() / 1000;
+    this.saidAt = now;
+    this.line = text;
+    this.lineUntil = now + 3.4 + text.length * 0.05 + cool;
+  }
+
   /** Things that happen to both of you (main.js reports them). */
   event(kind, vars) {
     const say = { lake: 'lake', summit: 'summit', Thunderstorm: 'storm', Rain: 'rain', Snow: 'snow', Fog: 'fog',
-      camp: 'camp', fire: 'fire', travel: 'travel', hello: 'hello' }[kind];
+      camp: 'camp', fire: 'fire', travel: 'travel', hello: 'hello', fish: 'fish', smore: 'smore', sit: 'sit' }[kind];
     if (say) this.say(say, vars, { force: kind === 'lake' || kind === 'summit' || kind === 'hello', cool: 90 });
     if (kind === 'travel') this.#arriveWith(vars.player);
     if (kind === 'lake' || kind === 'summit') this.curiosity = Math.max(0, this.curiosity - 40);
@@ -122,6 +139,44 @@ export class Companion {
     const [x, z] = this.spotNear(p.x + 3, p.z + 2, 3);
     this.place(x, z);
     if (this.stance !== 'rest') this.activity = 'follow';
+  }
+
+  // ---------------------------------------------------------------- the ATV
+  /** You climbed on: if they're close, they jog over and take the back seat. Returns whether they're coming. */
+  boardATV(atv) {
+    const d = Math.hypot(atv.pos.x - this.pos.x, atv.pos.z - this.pos.z);
+    if (d > 25 || this.stance === 'race' || this.mode === 'swim') return false;
+    this.boarding = true; this.boardT = 0; this.sitting = false;
+    this.say('hop', {}, { force: true, cool: 30 });
+    return true;
+  }
+
+  /** You got off (or were moved): they hop down on the other side. */
+  leaveATV(atv) {
+    const was = this.ride;
+    this.boarding = false; this.ride = false; this.sitting = false;
+    if (!was) return;
+    const rx = Math.cos(atv.yaw), rz = -Math.sin(atv.yaw);
+    const [x, z] = this.spotNear(atv.pos.x + rx * 1.5, atv.pos.z + rz * 1.5, 0.5);
+    this.place(x, z);
+    this.activity = 'follow';
+    this.say('off', {}, { force: true, cool: 20 });
+  }
+
+  /** Seated on the back: carried with the quad, holding on. */
+  #onATV(dt, ctx) {
+    const a = ctx.atv, p = this.pos;
+    a.seat(p, 1);
+    this.vel.set(0, 0, 0);
+    this.moving = 0; this.mode = 'walk'; this.sitting = true; this.lastGrade = 0;
+    this.hangout = null; this.idleFor = 0; this.activity = 'follow';
+    if (Math.abs(a.speed) > 10) this.say('fast', {}, { cool: 25 });
+    const now = performance.now() / 1000;
+    this.talking = this.line && now < this.lineUntil ? 'nod' : null;
+    this.face = a.yaw;
+    this.char.heading = a.yaw;
+    if (this.char.avatar) this.char.avatar.heading = a.yaw;
+    this.char.update(dt, this);
   }
 
   // ---------------------------------------------------------------- together
@@ -142,8 +197,21 @@ export class Companion {
   #decide(ctx) {
     const { player, playerSpeed, tent, fire, hour, weather } = ctx;
     const d = Math.hypot(player.x - this.pos.x, player.z - this.pos.z);
-    if (this.activity === 'race') return;
+    if (this.activity === 'race' || this.boarding || this.go) return;
     if (d > 260) { this.activity = 'catchup'; return; }
+    // a fire with stools set out and you nearby: take the stool you aren't on
+    if (ctx.fire && ctx.stools && Math.hypot(ctx.fire.x - player.x, ctx.fire.z - player.z) < 16 && this.stance !== 'free') {
+      let mine = ctx.seat;
+      if (mine < 0) {
+        let bd = Infinity;
+        ctx.stools.forEach((st, i) => { const q = Math.hypot(st.x - player.x, st.z - player.z); if (q < bd) { bd = q; mine = i; } });
+      }
+      const st = ctx.stools[mine === 0 ? 1 : 0];
+      if (this.activity !== 'camp' || !this.target?.stool) this.say('sit', {}, { cool: 300 });
+      this.activity = 'camp';
+      this.target = { x: st.x, z: st.z, yaw: st.yaw, kind: 'camp', stool: true };
+      return;
+    }
     const evening = hour > 19 || hour < 6;
     if (tent && evening && Math.hypot(tent.x - player.x, tent.z - player.z) < 25) {
       this.activity = 'camp';
@@ -198,6 +266,11 @@ export class Companion {
   /** Where to be right now. */
   #goal(ctx) {
     const { player, playerYaw, playerSpeed } = ctx;
+    if (this.go) return { x: this.go.x, z: this.go.z, near: 0.3 };
+    if (this.boarding) {
+      const a = ctx.atv, s = Math.sin(a.yaw), c = Math.cos(a.yaw);
+      return { x: a.pos.x + s * 1.7, z: a.pos.z + c * 1.7, near: 0.4 };
+    }
     switch (this.activity) {
       case 'follow':
       case 'catchup': {
@@ -219,7 +292,7 @@ export class Companion {
         // no need to chase the exact slot: within a loose bubble, just keep walking alongside
         return { x: player.x + fx * along + rx * side, z: player.z + fz * along + rz * side, near: d < 8 ? 2.5 : 1.5 };
       }
-      case 'wander': case 'camp': case 'race': return { ...this.target, near: 1.2 };
+      case 'wander': case 'camp': case 'race': return { ...this.target, near: this.target?.stool ? 0.3 : 1.2 };
       default: return null;
     }
   }
@@ -228,6 +301,7 @@ export class Companion {
   update(dt, ctx) {
     const { player, playerSpeed, tempC, sun, events } = ctx;
     const w = this.world, p = this.pos;
+    if (this.ride) { this.#onATV(dt, ctx); return; }
     const d = Math.hypot(player.x - p.x, player.z - p.z);
     this.idleFor = playerSpeed < 0.3 ? this.idleFor + dt : 0;
 
@@ -251,7 +325,7 @@ export class Companion {
 
     // move
     const goal = this.#goal(ctx);
-    if (goal && this.activity !== 'race') {
+    if (goal && this.activity !== 'race' && !this.boarding && !this.go) {
       // personal space: whatever they're heading for, they don't walk into you
       const gx = goal.x - player.x, gz = goal.z - player.z, gd = Math.hypot(gx, gz);
       if (gd < 3) { goal.x = player.x + (gx / (gd || 1)) * 3; goal.z = player.z + (gz / (gd || 1)) * 3; }
@@ -261,7 +335,9 @@ export class Companion {
       const gx = goal.x - p.x, gz = goal.z - p.z, gd = Math.hypot(gx, gz);
       if (gd > goal.near) {
         wx = gx / gd; wz = gz / gd;
-        if (this.activity === 'race') speed = RUN * 0.92;
+        if (this.go) speed = WALK * 1.1;
+        else if (this.boarding) speed = RUN;
+        else if (this.activity === 'race') speed = RUN * 0.92;
         else if (this.activity === 'follow' || this.activity === 'catchup') speed = clamp(Math.max(playerSpeed, WALK * 0.6) + (gd - 3) * 0.45, 0, gd > 25 ? RUN : Math.max(WALK, playerSpeed + 0.4));
         else speed = this.energy < 30 ? WALK * 0.75 : WALK;
         speed *= smoothstep(0, 1.2, gd - goal.near + 0.3);
@@ -279,6 +355,17 @@ export class Companion {
           }
         }
       }
+    }
+    if (this.boarding) {
+      this.boardT += dt;
+      const a = ctx.atv, s = Math.sin(a.yaw), c = Math.cos(a.yaw);
+      if (Math.hypot(a.pos.x + s * 1.7 - p.x, a.pos.z + c * 1.7 - p.z) < 1.1) {
+        this.boarding = false; this.ride = true;
+        this.say('ride', {}, { force: true, cool: 30 });
+      } else if (this.boardT > 7 || !a.riding) { this.boarding = false; this.say('catchup', {}, { cool: 30 }); }
+    }
+    if (this.activity === 'camp' && this.target?.stool && Math.hypot(this.target.x - p.x, this.target.z - p.z) < 0.7 && speed === 0) {
+      p.x = this.target.x; p.z = this.target.z;   // settle onto the stool
     }
     this.sitting = (!goal && this.activity === 'sit') || (this.activity === 'camp' && speed === 0);
     if (this.activity === 'race' && goal && Math.hypot(goal.x - p.x, goal.z - p.z) < 8) {
@@ -333,7 +420,7 @@ export class Companion {
     // standing: look at you while talking, otherwise at the view
     const now = performance.now() / 1000;
     this.talking = this.line && now < this.lineUntil && d < 25 ? 'nod' : null;
-    this.face = this.talking ? Math.atan2(-(player.x - p.x), -(player.z - p.z)) : this.hangout ? this.hangout.face : null;
+    this.face = this.talking ? Math.atan2(-(player.x - p.x), -(player.z - p.z)) : this.hangout ? this.hangout.face : (this.activity === 'camp' && this.target?.stool ? this.target.yaw : null);
     this.char.update(dt, this);
   }
 

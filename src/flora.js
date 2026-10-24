@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { hash2 } from './noise.js';
 import { buildSpecies, paintAtlas, foliageMaterial, foliageDepth, bakeImpostors, impostorGeometry, impostorMaterial } from './trees.js';
+import { CULL, expandedFrustum, sphereInView } from './culling.js';
 
 // Trees, burned snags, downed logs, krummholz, willows and boulders around the
 // hiker. Placement is a jittered grid driven by World.cover(), which reads the
@@ -17,6 +18,16 @@ const TREES = ['spruce', 'lodgepole', 'aspen', 'snag', 'krumm', 'willow'];
 const KINDS = [...TREES, 'boulder', 'log'];
 const CAP = { spruce: 4000, lodgepole: 3000, aspen: 2000, snag: 3000, krumm: 3000, willow: 1500, boulder: 6000, log: 4000 };
 const IMP_CAP = 140000;
+// Culling. The buffers are refilled only when the view has turned ROT_REFILL or moved
+// REFILL_M, so the frustum used to fill them is wider than the camera's by CULL.margin
+// (culling.js), which must stay above ROT_REFILL.
+const ROT_REFILL = 0.12;   // radians
+const OCC_FROM = 120;      // impostors nearer than this are never tested against the skyline
+const TALL = 30;           // tallest tree, for tile bounds
+const LOW_SUN = 0.55;      // below this (33 degrees up) shadows run long, and down a slope they run on without end: keep every caster
+const SHADOW_REACH = 170;  // longest shadow worth keeping a caster for (the shadow map reaches about this far)
+// height and crown radius of each kind at scale 1, for shadow-aware culling
+const DIM = { spruce: [18, 3.4], lodgepole: [20, 3], aspen: [12, 3], snag: [19, 1.5], krumm: [3, 2], willow: [3, 2], boulder: [2.5, 2.5], log: [1, 3.2] };
 
 function rockGeometries() {
   const boulder = new THREE.IcosahedronGeometry(1, 1);
@@ -85,6 +96,42 @@ export class Flora {
     this.tiles = new Map();
     this.filledAt = new THREE.Vector3(Infinity, 0, 0);
     this.dirty = true;
+
+    // view culling: set each frame by setView()
+    this.camera = null;
+    this.horizon = null;
+    this.shadowDir = null;
+    this.frustum = new THREE.Frustum();
+    this.fill = { key: -1, dir: new THREE.Vector3(0, 0, -1), cam: new THREE.Vector3(Infinity, 0, 0), fov: 0, aspect: 0, horizon: -1, light: new THREE.Vector3(), shadows: false };
+    this._dir = new THREE.Vector3();
+    this.stats = { kept: 0, outside: 0, hidden: 0 };
+  }
+
+  /** The camera, the terrain skyline and the direction the light comes from (null when nothing casts a shadow). */
+  setView(camera, horizon, shadowDir) {
+    this.camera = camera;
+    this.horizon = horizon;
+    this.shadowDir = shadowDir;
+  }
+
+  #cullKey() {
+    return (CULL.frustum && this.camera ? 1 : 0) + (CULL.occlusion && this.horizon?.active ? 2 : 0) + (this.shadowDir ? 4 : 0) + (this.shadowDir && this.shadowDir.y < LOW_SUN ? 8 : 0);
+  }
+
+  /** Has the view changed enough that the culled buffers no longer cover it? */
+  #viewStale() {
+    const f = this.fill, cam = this.camera;
+    if (!cam) return false;
+    const key = this.#cullKey();
+    if (key !== f.key) return true;
+    if (key & 1) {
+      cam.getWorldDirection(this._dir);
+      if (this._dir.angleTo(f.dir) > ROT_REFILL || Math.abs(cam.fov - f.fov) > 1 || cam.aspect !== f.aspect) return true;
+      if (cam.position.distanceTo(f.cam) > REFILL_M) return true;
+      if (key & 4 && this.shadowDir.angleTo(f.light) > 0.04) return true;
+    }
+    if (key & 2 && this.horizon.version !== f.horizon) return true;
+    return false;
   }
 
   tileKey(x, z) {
@@ -119,7 +166,7 @@ export class Flora {
       this.tiles.set(key, this.#populate(i, j));
       this.dirty = true;
     }
-    if (this.dirty || this.filledAt.distanceTo(pos) > REFILL_M) this.#fill(pos);
+    if (this.dirty || this.filledAt.distanceTo(pos) > REFILL_M || this.#viewStale()) this.#fill(pos);
     return todo.length - n;
   }
 
@@ -129,6 +176,7 @@ export class Flora {
     const n = Math.floor(size / SPACING);
     const items = Object.fromEntries(KINDS.map((k) => [k, []]));
     const solids = []; // x, z, radius, top
+    let minY = Infinity, maxY = -Infinity;
     for (let b = 0; b < n; b++) {
       for (let a = 0; a < n; a++) {
         const gi = ti * n + a, gj = tj * n + b;
@@ -157,14 +205,17 @@ export class Flora {
           : 0.62 + hash2(gi, gj, 5) * 0.55 - Math.max(0, e - cv.treeline + 120) / 450;
         if (s < 0.35) continue;
         items[kind].push(x, e, z, s, hash2(gi, gj, 6));
+        if (e < minY) minY = e;
+        if (e > maxY) maxY = e;
         if (kind === 'boulder') solids.push(x, z, s, e + s * 0.55);
         else if (kind !== 'krumm' && kind !== 'willow' && kind !== 'log') solids.push(x, z, (kind === 'snag' ? 0.2 : 0.3) * s + 0.1, Infinity);
       }
     }
-    return { ti, tj, items, solids: new Float32Array(solids) };
+    if (minY > maxY) minY = maxY = w.baseHeight(x0 + size / 2, z0 + size / 2);
+    return { ti, tj, items, solids: new Float32Array(solids), x0, z0, size, minY, maxY };
   }
 
-  /** Refill every instanced mesh from the tiles in range. */
+  /** Refill every instanced mesh from the tiles in range, leaving out what the camera cannot see. */
   #fill(pos) {
     this.filledAt.copy(pos);
     this.dirty = false;
@@ -174,6 +225,38 @@ export class Flora {
     let ni = 0;
     const imp = this.imp, im = imp.instanceMatrix.array, ic = imp.instanceColor.array, cell = imp.geometry.attributes.aCell.array;
     const cells = this.impostors.cells;
+
+    // what to cull against, remembered so #viewStale knows when it has gone out of date
+    const f = this.fill, cam = this.camera, horizon = this.horizon;
+    const key = f.key = this.#cullKey();
+    const planes = key & 1 ? expandedFrustum(cam, CULL.margin, this.frustum).planes : null;
+    const sky = key & 2 ? horizon : null;
+    const sun = key & 4 ? this.shadowDir : null;
+    if (cam) { cam.getWorldDirection(f.dir); f.cam.copy(cam.position); f.fov = cam.fov; f.aspect = cam.aspect; }
+    f.horizon = horizon ? horizon.version : -1;
+    if (sun) f.light.copy(sun);
+    // a shadow falls away from the light: this much sideways per metre of height
+    const sk = sun ? 1 / Math.max(sun.y, 0.05) : 0;
+    const sx = sun ? -sun.x * sk : 0, sz = sun ? -sun.z * sk : 0;
+    const keepCasters = !CULL.casters || !!(key & 8);
+    const stats = this.stats;
+    stats.kept = stats.outside = stats.hidden = 0;
+
+    /** Could this caster, or the shadow it throws, be on screen? (centre, half-height, crown radius) */
+    const casterSeen = (x, y, z, hh, R) => {
+      if (!planes || keepCasters) return true;
+      const r = hh + R + REFILL_M;
+      if (sphereInView(planes, x, y + hh, z, r)) return true;
+      if (!sun) return false;
+      // the shadow of the crown runs out along the ground to here; look along it in four samples
+      let h = hh * 2;
+      const len = Math.hypot(sx, sz) * h;
+      if (len > SHADOW_REACH) h *= SHADOW_REACH / len;
+      const L = Math.hypot(sx, sz) * h * 0.125 + REFILL_M;
+      for (let t = 0.125; t < 1.01; t += 0.25) if (sphereInView(planes, x + sx * h * t, y, z + sz * h * t, R + L)) return true;
+      return false;
+    };
+
     const put = (mesh, x, y, z, sx, sy, sz, rot, v) => {
       const k = counts.get(mesh);
       if (k >= mesh.instanceMatrix.count) return;
@@ -182,26 +265,44 @@ export class Flora {
       const c = mesh.instanceColor.array;
       c[k * 3] = v; c[k * 3 + 1] = v * 0.99; c[k * 3 + 2] = v * 0.96;
     };
+    const rr = ROCK_R + REFILL_M;
     for (const tile of this.tiles.values()) {
+      // whole-tile rejection: off screen (shadows included), or behind a ridge with nothing but far impostors in it
+      if (planes || sky) {
+        const cx = tile.x0 + tile.size / 2, cz = tile.z0 + tile.size / 2;
+        const hy = (tile.maxY - tile.minY) / 2, cy = tile.minY + hy;
+        // a sphere around the whole tile that holds every crown and shadow in it
+        if (planes && !casterSeen(cx, cy, cz, hy + TALL / 2, tile.size * 0.71 + hy + 20)) { stats.outside++; continue; }
+        // past the boulders and the full trees a tile holds nothing but impostors, which cast no shadow
+        const near = Math.hypot(cx - pos.x, cz - pos.z) - tile.size * 0.71;
+        if (sky && near > rr && sky.hiddenBox(tile.x0, tile.x0 + tile.size, tile.z0, tile.z0 + tile.size, tile.maxY + TALL)) { stats.hidden++; continue; }
+      }
       for (const kind of KINDS) {
         const list = tile.items[kind];
         const variants = this.meshes[kind];
+        const [dh, dr] = DIM[kind];
         for (let k = 0; k < list.length; k += 5) {
           const x = list[k], e = list[k + 1], z = list[k + 2], s = list[k + 3], r = list[k + 4];
-          const d = Math.hypot(x - pos.x, z - pos.z);
+          const ex = x - pos.x, ez = z - pos.z, d = Math.sqrt(ex * ex + ez * ez);
           const rot = r * Math.PI * 2, v = 0.82 + r * 0.3;
           if (kind === 'boulder') {
-            if (d < ROCK_R) put(variants[0], x, e - s * 0.2, z, s * (0.9 + r * 0.5), s, s * (1.3 - r * 0.4), rot, v);
+            if (d < ROCK_R && casterSeen(x, e, z, dh * s * 0.5, dr * s)) put(variants[0], x, e - s * 0.2, z, s * (0.9 + r * 0.5), s, s * (1.3 - r * 0.4), rot, v);
             continue;
           }
           if (kind === 'log') {
-            if (d < ROCK_R) put(variants[0], x, e + 0.12, z, 0.6 + s * 0.6, 1, 1, rot, v);
+            if (d < ROCK_R && casterSeen(x, e, z, 0.5 * s, dr)) put(variants[0], x, e + 0.12, z, 0.6 + s * 0.6, 1, 1, rot, v);
             continue;
           }
           const vi = Math.floor(((r * 7.31) % 1) * variants.length);
-          if (d < this.cardR) { put(variants[vi], x, e - 0.15, z, s, s, s, rot, v); continue; }
+          if (d < this.cardR) {
+            if (casterSeen(x, e, z, dh * s * 0.5, dr * s)) { put(variants[vi], x, e - 0.15, z, s, s, s, rot, v); stats.kept++; }
+            else stats.outside++;
+            continue;
+          }
           if (d > this.radius || (d > this.thin && r > 0.5) || ni >= IMP_CAP) continue;
           const c = cells[kind][vi];
+          if (planes && !sphereInView(planes, x, e + c.h * s * 0.5, z, c.h * s * 0.5 + REFILL_M)) { stats.outside++; continue; }
+          if (sky && d > OCC_FROM && sky.hidden(x, e + c.h * s, z)) { stats.hidden++; continue; }
           writeMatrix(im, ni, x, e - 0.15, z, c.w * s, c.h * s, c.w * s, rot);
           ic[ni * 3] = v; ic[ni * 3 + 1] = v; ic[ni * 3 + 2] = v;
           cell[ni * 2] = c.u; cell[ni * 2 + 1] = c.v;

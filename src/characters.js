@@ -68,7 +68,11 @@ export class Character {
         if (!o.isMesh) return;
         o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false;
         // scanned/generated models often come through fully metallic, which reads as black outdoors
-        for (const m of [].concat(o.material)) { m.metalness = 0; m.roughness = Math.max(0.75, m.roughness ?? 1); m.envMapIntensity = 0; }
+        for (const m of [].concat(o.material)) {
+          // closed, opaque skin: cull the back faces (generated models arrive double-sided)
+          if (m.side === THREE.DoubleSide && !m.transparent && !m.alphaTest && !m.alphaMap) m.side = THREE.FrontSide;
+          m.metalness = 0; m.roughness = Math.max(0.75, m.roughness ?? 1); m.envMapIntensity = 0;
+        }
       });
       const facing = new THREE.Group();   // turns the model to face +z with its left on +x
       facing.add(root);

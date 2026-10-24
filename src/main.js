@@ -4,7 +4,7 @@ import { farTerrain, terrainMaterial, colorTexture, coverTexture, makeNoiseTextu
 import { CDLODTerrain } from './cdlod.js';
 import { Flora } from './flora.js';
 import { buildLakes, buildTrails, buildSigns, buildStreams } from './features.js';
-import { Sky, setSun } from './sky.js';
+import { Sky, setSun, MOONS, sunDirection } from './sky.js';
 import { Calendar, SEASONS } from './calendar.js';
 import { Hiker } from './hiker.js';
 import { Camp } from './camp.js';
@@ -24,6 +24,10 @@ import { skyViewTexture } from './skyview.js';
 import { gustAt, WIND_DIR } from './wind.js';
 import { PRESETS, resolveQuality, isTouch, SCALE } from './quality.js';
 import { setRangeK } from './cdlod.js';
+import { HorizonMap, CULL } from './culling.js';
+import { ATV } from './atv.js';
+import { Fishing } from './fishing.js';
+import { Roast } from './roast.js';
 
 const SAVE_KEY = 'rawah-save-v2';
 const $ = (id) => document.getElementById(id);
@@ -37,6 +41,7 @@ const calendar = new Calendar(SEASONS[settings.season].doy);
 const QUALITY = resolveQuality(settings.quality);
 const Q = PRESETS[QUALITY];
 settings.shadows ??= Q.shadows;
+if (!MOONS[settings.moon]) settings.moon = 'new';
 setRangeK(Q.rangeK);
 
 // ------------------------------------------------------------------ renderer
@@ -88,12 +93,16 @@ await frame();
 
 const terrain = new CDLODTerrain(world, { colorMap: colorTexture(world.colorImage), coverMap: coverTexture(world.coverData, world.coverN), noise: noiseTex, detail: QUALITY !== 'low' });
 scene.add(terrain.group);
+const horizon = new HorizonMap(world);   // the terrain's skyline from the camera, for occlusion culling
+terrain.horizon = horizon;
 scene.add(farTerrain(world, farMat));
-const sky = new Sky(scene);
+const sky = new Sky(scene, renderer);
+sky.moon = MOONS[settings.moon];
 sky.sun.shadow.mapSize.set(Q.shadowMap, Q.shadowMap);
 const lakes = buildLakes(world);
 scene.add(lakes.group);
-scene.add(buildTrails(world));
+const trails = buildTrails(world);
+scene.add(trails);
 scene.add(buildSigns(world));
 const streams = buildStreams(world);
 scene.add(streams.group);
@@ -106,6 +115,9 @@ const grass = new Grass(terrain, Q.grass, flora.uniforms);
 scene.add(grass.mesh);
 const camp = new Camp(world, flora, scene);
 const hiker = new Hiker(world, flora);
+const atv = new ATV(world, flora, scene);
+const fishing = new Fishing(world, scene);
+const roast = new Roast(scene);
 const avatar = new Character(scene, settings.hero);
 const partner = new Character(scene, PARTNER);
 const rig = new CameraRig(camera, world, hiker, avatar);
@@ -131,6 +143,9 @@ const state = {
   paused: true, started: false,
   sleeping: 0, resting: false,
   rescue: null, travel: null,
+  seat: -1,                 // the camp stool you're sitting on
+  ask: null,                // a yes/no question for you
+  cut: null,                // a scripted moment (walking to the tent)
 };
 let hudState = null; // the last thing the HUD showed; the map reads it too
 
@@ -140,9 +155,23 @@ function spawnAtCar() {
   hiker.place(x, z, Math.atan2(-(toward[0] - x), -(toward[1] - z)));
 }
 
+/** Park the four-wheeler by the car, nose toward the trail. */
+function parkATV() {
+  const sp = world.startSpot;
+  if (!sp) { atv.place(hiker.pos.x + 4, hiker.pos.z, hiker.yaw); return; }
+  const yaw = Math.atan2(-(sp.toward[0] - sp.x), -(sp.toward[1] - sp.z));
+  const rx = Math.cos(yaw), rz = -Math.sin(yaw), fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+  for (const [r, f] of [[3.4, 1], [-3.4, 1], [3.4, -2], [-3.4, -2], [6, 3], [-6, 3]]) {
+    const x = sp.x + rx * r + fx * f, z = sp.z + rz * r + fz * f;
+    if (!world.lakeAt(x, z) && world.localGrade(x, z) < 0.25 && world.nearestTrail(x, z).d > 2.5) { atv.place(x, z, yaw); return; }
+  }
+  atv.place(sp.x + rx * 3.4, sp.z + rz * 3.4, yaw);
+}
+
 function save() {
   const data = {
     x: hiker.pos.x, z: hiker.pos.z, yaw: hiker.yaw, hour: state.hour, day: state.day, km: state.km,
+    atv: { x: atv.pos.x, z: atv.pos.z, yaw: atv.yaw }, fish: fishing.save(), roast: { eaten: roast.eaten, perfect: roast.perfect },
     discovered: [...state.discovered], camp: camp.save(), companion: companion.save(),
     stamina: hiker.stamina, warmth: hiker.warmth, weather: weather.save(),
   };
@@ -156,6 +185,9 @@ function restore() {
   Object.assign(state, { hour: s.hour, day: s.day, km: s.km || 0 });
   state.discovered = new Set(s.discovered || []);
   hiker.stamina = s.stamina ?? 100; hiker.warmth = s.warmth ?? 100;
+  if (s.atv) atv.place(s.atv.x, s.atv.z, s.atv.yaw);
+  fishing.load(s.fish);
+  roast.eaten = s.roast?.eaten || 0; roast.perfect = s.roast?.perfect || 0;
   camp.load(s.camp);
   companion.load(s.companion, hiker.pos);
   weather.load(s.weather);
@@ -164,6 +196,7 @@ function restore() {
 
 const hasSave = !!loadJSON(SAVE_KEY, null);
 spawnAtCar();
+parkATV();
 $('btn-continue').classList.toggle('hidden', !hasSave);
 
 // ------------------------------------------------------------------ input
@@ -173,6 +206,7 @@ if (isTouch) input.enableTouch(document.body);
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.started && !state.paused) pause(true); });
 input.onPress = (code) => {
   if (!state.started || state.travel) return;
+  if (state.ask) { if (code === 'KeyY') answerAsk(true); else if (code === 'KeyN' || code === 'Escape') answerAsk(false); return; }
   if (code === 'Escape' && map.open) { toggleMap(); return; }
   if ((code === 'KeyM' || code === 'Tab') && !state.paused) toggleMap();
   if (code === 'KeyG' && !state.paused && !map.open) toggleTogether();
@@ -187,6 +221,7 @@ input.onPress = (code) => {
   if (code === 'Escape' && input.mode !== 'kbm') pause(!state.paused); // keyboard Escape releases pointer lock instead
 };
 input.onPad = (name, stickOnly) => {
+  if (state.ask) { if (name === 'A') answerAsk(true); else if (name === 'B') answerAsk(false); return; }
   if (map.open) {
     if (name === 'B') toggleMap();
     else map.pad(name, stickOnly);
@@ -199,6 +234,8 @@ input.onPad = (name, stickOnly) => {
   }
   // D-pad up while hiking: do something together
   if (name === 'Up' && !stickOnly && state.started && !state.paused) { toggleTogether(); return; }
+  if (name === 'Down' && !stickOnly && state.started && !state.paused) { pressed.add('KeyT'); return; }
+  if (name === 'Left' && !stickOnly && state.started && !state.paused) { pressed.add('KeyQ'); return; }
   const sheet = !$('controls-sheet').classList.contains('hidden') ? $('controls-sheet') : null;
   const screen = sheet || (!state.started ? $('title') : state.paused ? $('pause') : null);
   if (sheet && (name === 'B' || name === 'Start')) { closeControls(); return; }
@@ -207,7 +244,7 @@ input.onPad = (name, stickOnly) => {
 };
 renderer.domElement.addEventListener('click', () => { if (state.started && !state.paused) lockPointer(); });
 document.addEventListener('pointerlockchange', () => {
-  if (document.pointerLockElement !== renderer.domElement && state.started && !map.open && !state.sleeping && !state.travel && !state.together) pause(true);
+  if (document.pointerLockElement !== renderer.domElement && state.started && !map.open && !state.sleeping && !state.travel && !state.together && !state.ask) pause(true);
 });
 
 /** Gamepad focus for menus: D-pad or stick moves, A presses, left/right adjusts sliders, B backs out. */
@@ -321,7 +358,7 @@ function pause(on) {
   state.paused = on;
   document.body.classList.toggle('playing', state.started && !on);
   $('pause').classList.toggle('hidden', !on);
-  if (on) { renderJournal(); keys.clear(); showTab('journal'); }
+  if (on) { renderJournal(); keys.clear(); showTab('journal'); nightLabel(); }
   else { lockPointer(); restartArmed = 0; $('btn-restart').textContent = 'Start over'; }
 }
 
@@ -344,12 +381,12 @@ function renderControls(el) {
   el.innerHTML = [
     col('Keyboard &amp; mouse', [[k('W') + k('A') + k('S') + k('D'), 'Walk'], ['Mouse', 'Look'], [k('Shift'), 'Hike fast'], [k('Space'), 'Hop'],
       [k('E'), 'Grab rock / let go'], [k('C'), 'Pitch / pack tent'], [k('F'), 'Campfire'], [k('Z'), 'Sleep at tent · hold to rest'],
-      [k('L'), 'Headlamp'], [k('G'), 'Do something together'], [k('V'), 'First / third person'], [k('M'), 'Map &amp; quick travel'], [k('Esc'), 'Pause']]),
+      [k('L'), 'Headlamp'], [k('G'), 'Do something together'], [k('R'), 'Ride the ATV / get off'], [k('T'), 'Cast a line / reel in'], [k('R'), 'Sit on a camp stool'], [k('Q'), 'Roast a marshmallow / eat it'], [k('V'), 'First / third person'], [k('M'), 'Map &amp; quick travel'], [k('Esc'), 'Pause']]),
     col('Xbox controller', [[p('LS'), 'Walk'], [p('RS'), 'Look'], [p('RT'), 'Hike fast'], [p('A', 'a'), 'Hop'], [p('B', 'b'), 'Grab rock / let go'],
-      [p('X', 'x'), 'Pitch / pack tent'], [p('RB'), 'Campfire'], [p('LT'), 'Rest / sleep'], [p('LB'), 'Headlamp'], [p('↑'), 'Do something together'], [p('Y', 'y'), 'Camera'],
+      [p('X', 'x'), 'Pitch / pack tent'], [p('RB'), 'Campfire'], [p('LT'), 'Rest / sleep'], [p('LB'), 'Headlamp'], [p('↑'), 'Do something together'], [p('↓'), 'Cast a line / reel in'], [p('←'), 'Roast a marshmallow / eat it'], [p('Y', 'y'), 'Ride / get off the ATV'], [p('R3'), 'Camera'],
       [p('View'), 'Map &amp; quick travel'], [p('Menu'), 'Pause · menus: D-pad, ' + p('A', 'a') + ' ' + p('B', 'b')]]),
     col('Touch', [['Left thumb', 'Walk (floating stick)'], ['Right thumb', 'Look'], [t('Hop') + t('Grab'), 'Hop, grab rock'], [t('Fast'), 'Toggle hiking fast'],
-      [t('Camp') + t('Fire'), 'Tent, campfire'], [t('Rest'), 'Hold to rest or sleep'], [t('Pal'), 'Do something together'], [t('Map'), 'Map &amp; quick travel']]),
+      [t('Ride'), 'Climb on the ATV, get off'], [t('Camp') + t('Fire'), 'Tent, campfire'], [t('Rest'), 'Hold to rest or sleep'], [t('Pal'), 'Do something together'], [t('Fish'), 'Cast a line, reel in'], [t('Roast'), 'Marshmallow'], [t('Map'), 'Map &amp; quick travel']]),
   ].join('');
 }
 function openControls() { renderControls($('controls-title')); $('controls-sheet').classList.remove('hidden'); }
@@ -365,7 +402,14 @@ function begin(fresh) {
     state.discovered = new Set();
     hiker.stamina = hiker.warmth = 100;
     weather.load({ seed: (Math.random() * 1e9) | 0 });
+    dismountATV();
+    fishing.cancel();
+    fishing.load(null);
+    fishing.log = { caught: 0, best: null, species: {} };
+    roast.eaten = roast.perfect = 0;
+    standUp(); roast.drop();
     spawnAtCar();
+    parkATV();
     companion.load(null, hiker.pos);
     companion.stance = 'together';
   } else restore();
@@ -460,6 +504,30 @@ $('set-weather').onchange = () => {
   weather.settle(state.day, state.hour);
   storeJSON('rawah-settings', settings);
 };
+$('set-moon').value = settings.moon;
+$('set-moon').onchange = () => { settings.moon = $('set-moon').value; sky.moon = MOONS[settings.moon]; storeJSON('rawah-settings', settings); };
+// one button between night and day: night goes to 10:15 pm, and back returns to the hour you left
+let dayHour = 12.9;
+const _sunTmp = new THREE.Vector3();
+const isNight = () => sunDirection(state.hour, _sunTmp).y < -0.05;
+const nightLabel = () => { $('set-night').textContent = isNight() ? 'Switch to day' : 'Switch to night'; };
+$('set-night').onclick = () => {
+  if (isNight()) state.hour = dayHour;
+  else { dayHour = state.hour; state.hour = 22.25; }
+  weather.settle(state.day, state.hour);
+  nightLabel();
+  hud.toast(isNight() ? 'Night falls.' : 'Daylight.');
+};
+$('set-hour').onchange = () => {
+  const raw = $('set-hour').value;
+  $('set-hour').value = '';
+  if (!raw) return;
+  const h = Number(raw);
+  state.hour = h;
+  weather.settle(state.day, state.hour);
+  nightLabel();
+  hud.toast('The hours slip by…');
+};
 $('set-view').value = settings.view;
 $('set-view').onchange = () => {
   if ($('set-view').value !== rig.mode) rig.toggle();
@@ -483,7 +551,7 @@ function renderJournal() {
   $('journal-forecast').textContent = weather.forecast;
   const stat = (v, label) => `<div class="stat"><b>${v}</b><span>${label}</span></div>`;
   $('journal-stats').innerHTML = stat(`${found}/${lakeList.length}`, 'Lakes') + stat(`${bagged}/${peaks.length}`, 'Summits')
-    + stat(state.km.toFixed(1), 'Km hiked') + stat(state.day, state.day === 1 ? 'Day' : 'Days');
+    + stat(state.km.toFixed(1), 'Km hiked') + stat(state.day, state.day === 1 ? 'Day' : 'Days') + stat(fishing.log.caught, 'Fish') + stat(roast.eaten, 'Marshmallows');
   const add = (text, sub, done, cls = '') => {
     const li = document.createElement('li');
     li.className = `${done ? 'done' : ''} ${cls}`;
@@ -493,6 +561,11 @@ function renderJournal() {
   };
   add('Summits', '', false, 'head');
   [...peaks].sort((a, b) => b.elev - a.elev).forEach((q) => add(q.name, `${ft(q.elev)} ft`, state.discovered.has(`peak:${q.name}`)));
+  if (fishing.log.caught) {
+    add('Fishing', '', false, 'head');
+    if (fishing.log.best) add(`Best: ${fishing.log.best.name}`, `${fishing.log.best.cm} cm · ${fishing.log.best.kg} kg`, true);
+    for (const [k, n] of Object.entries(fishing.log.species)) add(k === 'cutthroat' ? 'Colorado River cutthroat' : `${k[0].toUpperCase()}${k.slice(1)} trout`, `${n} caught`, true);
+  }
   add('Lakes', '', false, 'head');
   [...lakeList].sort((a, b) => b.level - a.level).forEach((l) => add(l.label, `${ft(l.level)} ft`, state.discovered.has(l.label)));
 }
@@ -527,7 +600,7 @@ function act() {
       const x = p.x + fx * 2, z = p.z + fz * 2;
       const why = camp.fireProblem(x, z);
       if (why) hud.toast(why, 'warn');
-      else { camp.light(x, z); audio.strike(); hud.toast('Fire lit — it will burn for about 90 minutes.'); companion.event('fire'); }
+      else { camp.light(x, z); audio.strike(); hud.toast('Fire lit — two stools are set out. [R] to sit, [Q] for a marshmallow.'); companion.event('fire'); }
     }
   }
   if (pressed.has('KeyZ') && camp.near(p, 'tent', 4.5) && !state.sleeping) startSleep();
@@ -535,7 +608,230 @@ function act() {
   state.resting = keys.has('KeyZ') && !camp.near(p, 'tent', 4.5) && hiker.mode === 'walk' && hiker.grounded && hiker.moving < 0.2;
 }
 
+// ------------------------------------------------------------------ the camp: stools and marshmallows
+const _sp = new THREE.Vector3(), _zero = new THREE.Vector3();
+
+/** The nearest stool within reach that Grant isn't on. */
+function freeStool(p) {
+  let best = -1, bd = 2.4;
+  camp.stools.forEach((st, i) => {
+    if (!st.obj.visible) return;
+    if (companion.sitting && Math.hypot(companion.pos.x - st.x, companion.pos.z - st.z) < 0.8) return;
+    const d = Math.hypot(st.x - p.x, st.z - p.z);
+    if (d < bd) { bd = d; best = i; }
+  });
+  return best;
+}
+
+function sitDown(i) {
+  const st = camp.stools[i];
+  hiker.place(st.x, st.z, st.yaw);
+  hiker.sitting = true; hiker.face = st.yaw;
+  state.seat = i;
+  avatar.heading = st.yaw; if (avatar.avatar) avatar.avatar.heading = st.yaw;
+  rig.eyeY = null;
+  hud.toast(camp.fire ? '[R] stand up  ·  [Q] roast a marshmallow' : '[R] stand up');
+}
+
+function standUp() {
+  if (state.seat < 0) return;
+  const st = camp.stools[state.seat];
+  hiker.sitting = false;
+  state.seat = -1;
+  // step back off the stool, away from the fire
+  const fx = camp.fire ? camp.fire.x : st.x - Math.sin(st.yaw), fz = camp.fire ? camp.fire.z : st.z - Math.cos(st.yaw);
+  const ax = st.x - fx, az = st.z - fz, al = Math.hypot(ax, az) || 1;
+  hiker.place(st.x + (ax / al) * 0.7, st.z + (az / al) * 0.7, st.yaw);
+  rig.eyeY = null;
+}
+
+/** One frame sitting: you look around, the stool holds you. */
+function seatedStep(dt, env) {
+  const st = camp.stools[state.seat];
+  hiker.yaw -= ctl.lookX;
+  hiker.pitch = clamp(hiker.pitch - ctl.lookY, -1.5, 1.5);
+  hiker.face = st.yaw;
+  _sp.set(st.x, world.height(st.x, st.z), st.z);
+  const ev = hiker.carried(dt, _sp, _zero, env);
+  hiker.sitting = true;
+  return ev;
+}
+
+/** [Q]: a marshmallow on a stick, or eat the one you have. */
+function marshmallow() {
+  if (roast.active) {
+    if (roast.extend > 0.35) { hud.toast('Pull it back from the flames first (let go of [Space]).'); return; }
+    const r = roast.eat();
+    audio.step('grass', 0.3);
+    hud.discovery(r.label, r.perfect ? 'The perfect marshmallow' : `Marshmallow ${roast.eaten}`, 'You ate it');
+    if (r.perfect) hiker.warmth = Math.min(100, hiker.warmth + 3);
+    companion.event('smore');
+    save();
+    return;
+  }
+  if (!camp.fire) { hud.toast('Light a campfire first: [F].'); return; }
+  if (Math.hypot(camp.fire.x - hiker.pos.x, camp.fire.z - hiker.pos.z) > 4.8) { hud.toast('Get closer to the fire.'); return; }
+  roast.start();
+  hud.toast('Hold [Space] to put it over the flames.');
+}
+
+// ------------------------------------------------------------------ "want to smash?"
+const smash = { t: 0, wait: 16, cool: 0 };
+const pickOne = (a) => a[Math.floor(Math.random() * a.length)];
+const showChar = (c, on) => { if (c.model) c.model.visible = on; else if (c.avatar?.root) c.avatar.root.visible = on; };
+
+/** While you toast marshmallows by the fire, Grant sometimes has an idea. */
+function smashClock(dt) {
+  smash.cool = Math.max(0, smash.cool - dt);
+  const near = Math.hypot(companion.pos.x - hiker.pos.x, companion.pos.z - hiker.pos.z) < 8;
+  const ok = roast.active && camp.tent && camp.fire && near && !state.ask && !state.cut && !atv.riding && !fishing.busy
+    && Math.hypot(camp.tent.x - hiker.pos.x, camp.tent.z - hiker.pos.z) < 16 && smash.cool <= 0;
+  if (!ok) { smash.t = Math.max(0, smash.t - dt * 0.5); return; }
+  smash.t += dt;
+  if (smash.t > smash.wait) askSmash();
+}
+
+function askSmash() {
+  const hero = CHARACTERS[settings.hero].name;
+  companion.speak(`${hero}, want to smash?`, 22);
+  state.ask = { t: 0 };
+  $('ask').querySelector('.ak-q').textContent = `${companion.name}: “${hero}, want to smash?”`;
+  $('ask').classList.remove('hidden');
+  if (document.pointerLockElement) document.exitPointerLock();
+  smash.cool = 150; smash.t = 0; smash.wait = 14 + Math.random() * 10;
+}
+
+function answerAsk(yes) {
+  if (!state.ask) return;
+  state.ask = null;
+  $('ask').classList.add('hidden');
+  lockPointer();
+  if (yes && camp.tent) startScene();
+  else companion.speak(pickOne(['Your loss. More marshmallows for me.', 'Suit yourself. Pass the marshmallows.', 'Fair enough. Eyes on your stick, it\'s burning.']));
+}
+$('ask-yes').onclick = () => answerAsk(true);
+$('ask-no').onclick = () => answerAsk(false);
+
+/** You both get up, walk to the tent door and go in; the tent shakes for ten seconds; you come out. */
+function startScene() {
+  const t = camp.tent;
+  standUp(); roast.drop(); fishing.cancel();
+  const dx = Math.sin(t.yaw), dz = Math.cos(t.yaw), sx = Math.cos(t.yaw), sz = -Math.sin(t.yaw);   // out of the door, and across it
+  const door = (side) => ({ x: t.x + dx * 1.45 + sx * side * 0.3, z: t.z + dz * 1.45 + sz * side * 0.3 });
+  state.cut = { phase: 'walk', t: 0, a: door(1), b: door(-1), view: rig.mode };
+  companion.go = state.cut.b;
+  companion.sitting = false;
+  if (rig.mode === 'first') { rig.toggle(); avatar.setFirstPerson(false); }
+  rig.dist = Math.max(rig.dist, 5);
+  keys.clear();
+}
+
+function endScene() {
+  const C = state.cut;
+  if (!C) return;
+  showChar(avatar, true); showChar(partner, true);
+  companion.go = null;
+  if (C.view === 'first' && rig.mode === 'third') { rig.toggle(); avatar.setFirstPerson(true); }
+  state.cut = null;
+}
+
+/** One frame of the scripted walk, the wait inside, and the way out. */
+function cutStep(dt, env) {
+  const C = state.cut, t = camp.tent, hp = hiker.pos;
+  C.t += dt;
+  const turn = (to, k) => { let d = to - hiker.yaw; d = Math.atan2(Math.sin(d), Math.cos(d)); hiker.yaw += d * Math.min(1, dt * k); };
+  if (C.phase === 'walk') {
+    const dx = C.a.x - hp.x, dz = C.a.z - hp.z, d = Math.hypot(dx, dz);
+    const sp = d > 0.3 ? 2.1 : 0;
+    _v.set(sp ? (dx / d) * sp : 0, 0, sp ? (dz / d) * sp : 0);
+    _sp.set(hp.x + _v.x * dt, 0, hp.z + _v.z * dt); _sp.y = world.height(_sp.x, _sp.z);
+    if (sp) turn(Math.atan2(-dx, -dz), 8);
+    hiker.carried(dt, _sp, _v, env);
+    hiker.moving = sp ? 1 : 0;
+    hiker.phase += sp * dt * (Math.PI / 1.4);
+    const cd = Math.hypot(companion.pos.x - C.b.x, companion.pos.z - C.b.z);
+    if ((d < 0.35 && cd < 0.5) || C.t > 14) {
+      // in through the flap
+      C.phase = 'shake'; C.t = 0;
+      audio.zip();
+      showChar(avatar, false); showChar(partner, false);
+      camp.shake(10);
+    }
+  } else if (C.phase === 'shake') {
+    turn(t.yaw, 3);
+    hiker.pitch += (-0.1 - hiker.pitch) * Math.min(1, dt * 2);
+    _sp.set(hp.x, hp.y, hp.z);
+    hiker.carried(dt, _sp, _zero, env);
+    if (C.t > 10.4) {
+      audio.zip();
+      endScene();
+      companion.speak('Ahhh… like old times.', 2);
+      hud.toast('…and out they come.');
+    }
+  }
+  return hiker.events;
+}
+
+// ------------------------------------------------------------------ the four-wheeler
+const _seat = new THREE.Vector3();
+const rider = { pos: _seat, vel: new THREE.Vector3(), phase: 0, moving: 0, mode: 'walk', sitting: true, lastGrade: 0, face: 0 };
+let lookIdle = 0, rideCam = null, rideTold = true;
+
+function mountATV() {
+  fishing.cancel();
+  standUp(); roast.drop();
+  atv.mount();
+  hiker.yaw = atv.yaw; hiker.pitch = -0.2;
+  rideCam = rig.mode;
+  if (rig.mode === 'first') { rig.toggle(); avatar.setFirstPerson(false); }
+  rig.dist = Math.max(rig.dist, 5.2);
+  rig.eyeY = null;
+  const company = companion.boardATV(atv);
+  atv.hold = company;
+  rideTold = !company;
+  hud.toast(company ? `${companion.name} is hopping on the back…` : '[W/S] throttle · [A/D] steer · [Shift] boost · [R] get off');
+}
+
+function dismountATV() {
+  if (!atv.riding) return;
+  const spot = atv.dismount();
+  atv.hold = false;
+  companion.leaveATV(atv);
+  hiker.place(spot.x, spot.z, spot.yaw);
+  hiker.sitting = false;
+  if (rideCam === 'first' && rig.mode === 'third') { rig.toggle(); avatar.setFirstPerson(true); }
+  rideCam = null;
+  rig.eyeY = null;
+}
+
+/** One frame of riding; returns the hiker's events. */
+function rideStep(dt, env) {
+  atv.hold = companion.boarding;
+  if (!rideTold && companion.ride) { rideTold = true; hud.toast('[W/S] throttle · [A/D] steer · [Shift] boost · [R] get off'); }
+  hiker.yaw -= ctl.lookX;
+  hiker.pitch = clamp(hiker.pitch - ctl.lookY, -1.5, 1.5);
+  for (const e of atv.update(dt, ctl)) {
+    if (e.type === 'bump') audio.thud(e.hard);
+    else if (e.type === 'splash') { audio.splash(); hud.toast('Too deep for the ATV.', 'warn'); }
+  }
+  // the chase camera swings round behind the quad unless you're looking about
+  lookIdle = Math.abs(ctl.lookX) + Math.abs(ctl.lookY) > 0.002 ? 0 : lookIdle + dt;
+  if (lookIdle > 0.5 && atv.speed > 1) {
+    let d = atv.yaw - hiker.yaw;
+    d = Math.atan2(Math.sin(d), Math.cos(d));
+    hiker.yaw += d * Math.min(1, dt * 2.4);
+    hiker.pitch += (-0.2 - hiker.pitch) * Math.min(1, dt * 1.5);
+  }
+  const fx = -Math.sin(atv.yaw), fz = -Math.cos(atv.yaw);
+  const vel = _v.set(fx * atv.speed, 0, fz * atv.speed);
+  return hiker.carried(dt, atv.pos, vel, env);
+}
+const _v = new THREE.Vector3();
+
 function startSleep() {
+  dismountATV();
+  fishing.cancel();
+  standUp(); roast.drop();
   const h = state.hour;
   const night = h >= 19 || h < 5;
   const target = night ? 7 : h + 2;
@@ -568,13 +864,16 @@ function advanceClock(mins) {
 /** The date drives the sun, the season's weather mix, lake ice and snowpack. */
 function updateCalendar() {
   calendar.setDay(state.day);
-  setSun(calendar.sun);
+  setSun({ ...calendar.sun, doy: calendar.doy });
   weather.climate = calendar.climate;
   world.iceLine = calendar.iceLine;
   lakes.uniforms.uIceLine.value = world.iceLine;
 }
 
 function rescue(why) {
+  dismountATV();
+  fishing.cancel();
+  standUp(); roast.drop();
   state.rescue = { t: 0 };
   $('fade').classList.add('on');
   $('fade-text').textContent = `${why} You limp back to ${camp.tent ? 'camp' : 'the car'}.`;
@@ -646,6 +945,9 @@ function landing(d) {
 }
 
 function startTravel(d) {
+  dismountATV();
+  fishing.cancel();
+  standUp(); roast.drop(); endScene();
   document.body.classList.remove('map-open');
   const to = landing(d);
   const from = camera.position.clone();
@@ -784,6 +1086,25 @@ setLoad(1, 'Ready');
 $('loading').classList.add('hidden');
 $('title').classList.remove('hidden');
 
+/** Bring the culling data up to date for this frame's camera: the terrain skyline, the light's direction, the chunked meshes. */
+const _toLight = new THREE.Vector3(), _eye2 = new THREE.Vector3(), _rf = new THREE.Vector3(), _rr = new THREE.Vector3(), _rh = new THREE.Vector3();
+function cullView() {
+  camera.updateMatrixWorld();
+  horizon.update(camera.position, !state.travel);   // flying over the crest sees everything
+  const lit = renderer.shadowMap.enabled && sky.sun.intensity > 0.02;
+  _toLight.subVectors(sky.sun.position, sky.sun.target.position).normalize();
+  flora.setView(camera, horizon, lit ? _toLight : null);
+  trails.chunks.cull(horizon);
+  streams.chunks.cull(horizon);
+}
+
+const _v2 = new THREE.Vector2();
+/** Pixels per metre at one metre, for the fire's point sprites. */
+function flameScale() {
+  renderer.getDrawingBufferSize(_v2);
+  return _v2.y / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+}
+
 function tick(dt, draw = true) {
   t += dt;
   let gameMin = 0;
@@ -806,17 +1127,26 @@ function tick(dt, draw = true) {
   ctl.sprint = keys.has('ShiftLeft') || keys.has('ShiftRight');
   ctl.jump = live && pressed.has('Space');
   ctl.grab = live && pressed.has('KeyE');
+  // fishing: the lean (A/D or a mouse swing), the reel (held Space) and the hook (Space pressed); while a fish is on you stand and fight it
+  const fishInp = { x: clamp(ctl.move.x + (ctl.lookX / Math.max(dt, 0.001)) / 3, -1, 1), reel: live && keys.has('Space'), hook: live && pressed.has('Space') };
+  if (live && pressed.has('KeyT') && !atv.riding && !state.together) {
+    fishing.toggle({ pos: hiker.pos, yaw: hiker.yaw, mode: hiker.mode, grounded: hiker.grounded });
+  }
+  if (fishing.locked) { ctl.move.set(0, 0); ctl.jump = false; ctl.lookX = 0; ctl.lookY = 0; }
+  if (roast.active || state.seat >= 0) ctl.jump = false;   // Space reaches the stick, not a hop
+  if (state.seat >= 0 || state.cut) ctl.move.set(0, 0);
+  if (state.cut) { ctl.jump = false; ctl.lookX = 0; ctl.lookY = 0; }
 
   const p = hiker.pos;
   const env = {
-    tempC: tempC(state.hour, p.y) - (p.y > world.treeline(p.x, p.z) ? 3 : 0) - Math.max(0, weather.wind) * 3,
+    tempC: tempC(state.hour, p.y) - (p.y > world.treeline(p.x, p.z) ? 3 : 0) - Math.max(0, weather.wind) * 3 - (atv.riding ? Math.abs(atv.speed) * 0.3 : 0),
     nearFire: !!camp.fire && camp.near(p, 'fire', 6),
     inTent: !!state.sleeping,
     resting: state.resting,
   };
   if (live) {
     const before = hiker.pos.clone();
-    const events = hiker.update(dt, ctl, env);
+    const events = state.cut ? cutStep(dt, env) : state.seat >= 0 ? seatedStep(dt, env) : atv.riding ? rideStep(dt, env) : hiker.update(dt, ctl, env);
     state.km += Math.hypot(p.x - before.x, p.z - before.z) / 1000;
     for (const e of events) {
       if (e.type === 'step') audio.step(e.surface, e.speed);
@@ -829,33 +1159,86 @@ function tick(dt, draw = true) {
         else { audio.thud(true); rig.land(8); hud.toast(e.why, 'warn'); }
       }
     }
-    act();
+    // [R]: get off the ATV or stand up; or climb on whichever of the ATV and a free stool is closer
+    if (state.cut) { /* a moment is playing out */ }
+    else if (state.seat >= 0 && (pressed.has('KeyR') || ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((k) => pressed.has(k)))) standUp();
+    else if (pressed.has('KeyR')) {
+      const si = freeStool(p);
+      const dStool = si >= 0 ? Math.hypot(camp.stools[si].x - p.x, camp.stools[si].z - p.z) : Infinity;
+      const dAtv = atv.near(p) ? Math.hypot(atv.pos.x - p.x, atv.pos.z - p.z) : Infinity;
+      if (atv.riding) dismountATV();
+      else if (!fishing.busy && hiker.mode === 'walk' && hiker.grounded && dStool < dAtv && dStool < Infinity) sitDown(si);
+      else if (dAtv < Infinity && hiker.mode === 'walk' && hiker.grounded) mountATV();
+    }
+    if (pressed.has('KeyQ') && !atv.riding && !fishing.busy && !state.cut) marshmallow();
+    if (state.cut || fishing.locked) { /* hands full */ } else if (atv.riding || state.seat >= 0) { if (pressed.has('KeyL')) { state.lamp = !state.lamp; audio.step('rock', 0); } state.resting = false; } else act();
     // caught out in it: rain soaks you (less under thick forest), wet snow too
     const soak = weather.precip * (1 - weather.snowK * 0.6) * (1 - world.coverAt(p.x, p.z, 0) * 0.5);
     if (soak > 0.2 && hiker.mode !== 'swim') hiker.wet = Math.max(hiker.wet, 30 * soak);
     const scale = (state.resting ? 8 : 1) * settings.timeScale;
     gameMin = dt * scale;
     advanceClock(gameMin);
-    camp.update(dt, dt * scale, t);
+    camp.update(dt, dt * scale, t, flameScale());
+    smashClock(dt);
+    if (state.ask) { state.ask.t += dt; if (state.ask.t > 25) answerAsk(false); }
     if (t - lastDiscoveryCheck > 0.5) { lastDiscoveryCheck = t; checkDiscoveries(); }
     saveTimer += dt;
     if (saveTimer > 10) { saveTimer = 0; save(); }
   } else {
-    camp.update(dt, 0, t);
+    camp.update(dt, 0, t, flameScale());
   }
   input.endFrame();
 
-  avatar.update(dt, hiker);
+  if (atv.riding) {
+    atv.seat(_seat);
+    rider.face = atv.yaw;
+    avatar.heading = atv.yaw; if (avatar.avatar) avatar.avatar.heading = atv.yaw;
+    avatar.update(dt, rider);
+  } else avatar.update(dt, hiker);
+  if (fishing.locked && state.started && !state.paused) {
+    // the view follows the fish: turn and tip down to keep it in sight as it comes in
+    const eyeP = hiker.eye(_eye2), dx = fishing.focus.x - eyeP.x, dz = fishing.focus.z - eyeP.z, dy = fishing.focus.y - eyeP.y;
+    const k = Math.min(1, dt * 2.5), horiz = Math.hypot(dx, dz);
+    let dyaw = Math.atan2(-dx, -dz) - hiker.yaw;
+    dyaw = Math.atan2(Math.sin(dyaw), Math.cos(dyaw));
+    if (horiz > 1.2) hiker.yaw += dyaw * k * 0.8;
+    hiker.pitch += (clamp(Math.atan2(dy, Math.max(horiz, 0.5)) + 0.12, -1.1, 0.2) - hiker.pitch) * k;
+  }
+  if (roast.active) {
+    const sy = Math.sin(hiker.yaw), cy = Math.cos(hiker.yaw);
+    const f = camp.fire;
+    _rf.set(-sy, 0, -cy); _rr.set(cy, 0, -sy);
+    _rh.set(hiker.pos.x + _rr.x * 0.26 + _rf.x * 0.3, hiker.pos.y + (state.seat >= 0 ? 0.8 : 1.08), hiker.pos.z + _rr.z * 0.26 + _rf.z * 0.3);
+    roast.update(state.paused ? 0 : dt, {
+      hand: _rh, fwd: _rf, right: _rr, t,
+      fire: f ? { x: f.x, z: f.z, y: camp.flameBase, fuel: Math.min(1, f.life / 25) } : null,
+      hold: live && keys.has('Space'),
+    });
+  }
+  if (state.started && !state.paused && !state.travel && !state.sleeping) {
+    for (const e of fishing.update(dt, { pos: hiker.pos, yaw: hiker.yaw, pitch: hiker.pitch, mode: hiker.mode }, fishInp)) {
+      if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
+      else if (e.type === 'sound') { if (e.name === 'splash') audio.splash(); else if (e.name === 'reel') audio.reel(); else audio.whoosh?.(0.35); }
+      else if (e.type === 'catch') {
+        const f = e.fish;
+        hud.discovery(f.name, `${f.cm} cm · ${f.kg} kg · fish ${f.n}${f.record ? ' · your biggest yet' : ''}`, 'Caught');
+        companion.event('fish');
+        save();
+      }
+    }
+  }
   const zoom = input.takeWheel();
   let focus = p;
   if (state.travel) {
     // stream trees under the flight first, then around where you'll land
     const u = flyStep(dt, flyFocus);
     focus = flyFocus;
+    cullView();
     flora.update(u < 0.55 ? flyFocus : p, 2, dt);
   } else {
-    rig.update(dt, { zoom: map.open ? 0 : zoom, sprinting: ctl.sprint && hiker.moving > 0.5 && hiker.stamina > 2, strafe: ctl.move.x });
+    rig.update(dt, { zoom: map.open ? 0 : zoom, sprinting: atv.riding ? ctl.sprint && atv.speed > 6 : ctl.sprint && hiker.moving > 0.5 && hiker.stamina > 2, strafe: ctl.move.x });
     floraTimer += dt;
+    cullView();
     flora.update(p, floraTimer > 0.12 ? 1 : 0, dt);
     if (floraTimer > 0.12) floraTimer = 0;
   }
@@ -872,6 +1255,7 @@ function tick(dt, draw = true) {
   atmosphere.uSnow.value = Math.max(weather.snowCover, packLine < 4500 ? 1 : 0);
   atmosphere.uSnowLine.value = Math.min(fresh ? weather.snowLine : 5000, packLine);
   atmosphere.uGreen.value = clamp((0.78 - calendar.cure) / 0.7, 0, 1);
+  sky.pixelRatio = renderer.getPixelRatio();
   sky.update(state.hour, eye, focus, t, weather);
   // snow underfoot bounces light back up into the shadows
   const onSnow = atmosphere.uSnow.value * smoothstep(atmosphere.uSnowLine.value - 60, atmosphere.uSnowLine.value + 60, p.y);
@@ -887,6 +1271,7 @@ function tick(dt, draw = true) {
   const wspd = 2 + Math.max(0, weather.wind) * 9;
   precip.update(state.paused ? 0 : dt, camera, weather, [WIND_DIR[0] * wspd, WIND_DIR[1] * wspd], precipLight.copy(sky.hemi.color).multiplyScalar(0.2 + sky.light * 0.75 + weather.flash));
   const tC = tempC(h, p.y);
+  grass.clear(camp.fire ? [camp.fire.x, camp.fire.z, 1.9] : null, camp.tent ? [camp.tent.x, camp.tent.z, 2.1] : null);
   grass.update(camera, hiker, clamp((1.5 - tC) / 4, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0), calendar.cure);
   headlamp.intensity = state.lamp ? 60 : 0;
   lakes.uniforms.uSky.value.copy(sky.uniforms.uHorizon.value).lerp(sky.uniforms.uZenith.value, 0.3);
@@ -899,7 +1284,7 @@ function tick(dt, draw = true) {
     const cEvents = [];
     companion.update(state.sleeping ? 0 : dt, {
       player: p, playerYaw: hiker.yaw, playerSpeed: Math.hypot(hiker.vel.x, hiker.vel.z),
-      tent: camp.tent, fire: camp.fire, hour: state.hour, weather, sun: sky.light, cover: cv,
+      atv, stools: camp.fire ? camp.stools : null, seat: state.seat, tent: camp.tent, fire: camp.fire, hour: state.hour, weather, sun: sky.light, cover: cv,
       warmth: hiker.warmth, stamina: hiker.stamina, events: cEvents,
     });
     // you beat them there
@@ -919,6 +1304,7 @@ function tick(dt, draw = true) {
   } else if (cv.snag < 0.1) state.inBurn = false;
   const gust = gustAt(p.x, p.z, flora.uniforms.uTime.value, flora.uniforms.uCalm.value); // the gust you see in the grass
   const exposure = smoothstep(cv.treeline - 120, cv.treeline + 200, p.y);
+  audio.engine(atv.riding && !state.paused, Math.min(1, Math.abs(atv.speed) / 14), atv.riding ? Math.max(0, ctl.move.y) : 0);
   audio.update(dt, {
     exposure, gust, forest: cv.forest, daylight: sky.light,
     dusk: (state.hour > 17.8 && state.hour < 20.5) || (state.hour > 5.8 && state.hour < 7.5),
@@ -931,9 +1317,18 @@ function tick(dt, draw = true) {
     const [place, sub] = locate(p, cv);
     const found = lakeList.filter((l) => state.discovered.has(l.label)).length;
     const status = [hiker.mode === 'climb' ? 'Climbing' : hiker.mode === 'swim' ? 'Swimming' : hiker.sliding ? 'Sliding' : '',
-      hiker.injured > 0 ? 'Sore ankle' : '', hiker.wet > 0 ? 'Wet' : '', hiker.cold ? 'Cold' : '', state.resting ? 'Resting' : '']
+      hiker.injured > 0 ? 'Sore ankle' : '', hiker.wet > 0 ? 'Wet' : '', hiker.cold ? 'Cold' : '', state.resting ? 'Resting' : '', state.seat >= 0 ? 'By the fire' : '', atv.riding ? `ATV · ${Math.round(Math.abs(atv.speed) * 3.6)} km/h` : '']
       .filter(Boolean).join(' · ');
     let hint = hiker.hint;
+    if (state.cut) hint = '';
+    else if (fishing.hint) hint = fishing.hint;
+    else if (roast.active) hint = roast.hint;
+    else if (state.seat >= 0) hint = camp.fire ? '[R] stand up  ·  [Q] roast a marshmallow' : '[R] stand up';
+    else if (!hint && !atv.riding && freeStool(p) >= 0) hint = '[R] sit on the stool';
+    else if (!hint && camp.fire && Math.hypot(camp.fire.x - p.x, camp.fire.z - p.z) < 3.8 && !fishing.busy) hint = '[Q] roast a marshmallow';
+    else if (!hint && !atv.riding && !fishing.busy && fishing.spotAhead({ pos: hiker.pos, yaw: hiker.yaw, mode: hiker.mode })) hint = '[T] cast a line';
+    if (atv.riding) hint = '[R] get off the ATV';
+    else if (!hint && atv.near(p) && hiker.mode === 'walk') hint = '[R] ride the ATV';
     if (!hint && camp.near(p, 'tent', 4.5)) hint = state.hour >= 19 || state.hour < 5 ? '[Z] sleep until morning · [F] fire · [C] pack up' : '[Z] nap · [F] fire · [C] pack up';
     if (!hint && sky.light < 0.35 && !camp.tent && hiker.mode === 'walk') hint = 'Getting dark — find flat ground away from water and [C] make camp';
     if (!hint && sky.light < 0.2 && !state.lamp) hint = '[L] headlamp';
@@ -1011,7 +1406,7 @@ if (DEV) {
     look(yaw, pitch = 0) { hiker.yaw = yaw; hiker.pitch = pitch; },
     press(code) { pressed.add(code); },
     map() { toggleMap(); },
-    gmap: map, companion,
+    gmap: map, companion, grass, horizon, CULL, atv, fishing, sky, roast, camp, sitDown, standUp, smash, askSmash, answerAsk, startScene, mountATV, dismountATV,
     travel(name) { if (!map.open) toggleMap(); const i = map.list.findIndex((d) => d.name === name); if (i >= 0) { map.pick(i); map.travel(); } return i; },
     hold(code, on = true) { if (on) keys.add(code); else keys.delete(code); },
     step(n = 1, dt = 1 / 60) { for (let i = 0; i < n; i++) tick(dt, i === n - 1); },

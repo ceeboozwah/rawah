@@ -9,8 +9,8 @@ const $ = (id) => document.getElementById(id);
 const ft = (m) => Math.round(m * 3.28084).toLocaleString();
 
 // keyboard key -> [pad button, style] and touch label
-const PAD = { Space: ['A', 'a'], E: ['B', 'b'], C: ['X', 'x'], V: ['Y', 'y'], L: ['LB'], F: ['RB'], Z: ['LT'], Shift: ['RT'], M: ['View'], Tab: ['View'], G: ['↑'], Esc: ['Menu'], Enter: ['A', 'a'] };
-const TOUCH = { Space: 'Hop', E: 'Grab', C: 'Camp', F: 'Fire', Z: 'Rest', L: 'Lamp', V: 'Cam', M: 'Map', G: 'Pal', Tab: 'Map', Shift: 'Fast', Esc: 'Pause', Enter: 'Travel' };
+const PAD = { Space: ['A', 'a'], E: ['B', 'b'], C: ['X', 'x'], V: ['R3'], L: ['LB'], F: ['RB'], Z: ['LT'], Shift: ['RT'], M: ['View'], Tab: ['View'], G: ['↑'], T: ['↓'], Q: ['←'], R: ['Y', 'y'], Esc: ['Menu'], Enter: ['A', 'a'] };
+const TOUCH = { Space: 'Hop', E: 'Grab', C: 'Camp', F: 'Fire', Z: 'Rest', L: 'Lamp', V: 'Cam', M: 'Map', G: 'Pal', T: 'Fish', Q: 'Roast', R: 'Ride', Tab: 'Map', Shift: 'Fast', Esc: 'Pause', Enter: 'Travel' };
 const esc = (t) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
 /** HTML for one key in the current input mode. */
@@ -84,8 +84,9 @@ export class Hud {
     setTimeout(() => el.remove(), 4600);
   }
 
-  discovery(title, sub) {
+  discovery(title, sub, kicker = 'Discovered') {
     const el = $('discovery');
+    el.querySelector('.d-kicker').textContent = kicker;
     el.querySelector('.d-title').textContent = title;
     el.querySelector('.d-sub').textContent = sub;
     el.classList.remove('show');

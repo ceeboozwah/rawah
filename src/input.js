@@ -10,7 +10,7 @@ const PAD = {
   0: 'Space',      // A: hop / lunge
   1: 'KeyE',       // B: grab rock / let go
   2: 'KeyC',       // X: pitch / pack tent
-  3: 'KeyV',       // Y: first / third person
+  3: 'KeyR',       // Y: ride / get off the ATV
   4: 'KeyL',       // LB: headlamp
   5: 'KeyF',       // RB: campfire
   6: 'KeyZ',       // LT: rest / sleep
@@ -150,6 +150,7 @@ export class Input {
     ui.innerHTML = `
       <div class="t-stick"><i></i></div>
       <div class="t-col">
+        <button data-code="KeyR">Ride</button>
         <button data-code="KeyE">Grab</button>
         <button data-code="Space" class="big">Hop</button>
       </div>
@@ -160,6 +161,8 @@ export class Input {
         <button data-code="KeyZ" data-hold>Rest</button>
       </div>
       <div class="t-top">
+        <button data-code="KeyT">Fish</button>
+        <button data-code="KeyQ">Roast</button>
         <button data-code="KeyG">Pal</button>
         <button data-code="KeyL">Lamp</button>
         <button data-code="KeyV">Cam</button>
