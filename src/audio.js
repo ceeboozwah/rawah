@@ -170,6 +170,13 @@ export class Audio {
     this.#burst(0.12, 90, 0.8, 0.3, 'lowpass', 0.01, this.noise);
   }
 
+  /** Bacon and eggs in a hot pan. */
+  sizzle() {
+    if (!this.ctx) return;
+    this.#burst(0.22, 5200, 0.7, 0.05, 'highpass', 0, this.noise);
+    if (Math.random() < 0.4) this.#burst(0.025, 1400 + Math.random() * 1200, 3, 0.1, 'bandpass', Math.random() * 0.15);
+  }
+
   /** Something soft hitting the ground. */
   plop() {
     if (!this.ctx) return;

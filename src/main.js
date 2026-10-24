@@ -31,6 +31,7 @@ import { Roast } from './roast.js';
 import { Wood } from './wood.js';
 import { Coffee } from './coffee.js';
 import { Dump } from './dump.js';
+import { Breakfast } from './breakfast.js';
 
 const SAVE_KEY = 'rawah-save-v2';
 const $ = (id) => document.getElementById(id);
@@ -124,6 +125,7 @@ const roast = new Roast(scene);
 const wood = new Wood(world, flora, scene);
 const coffee = new Coffee(world, scene);
 const dump = new Dump(scene, world);
+const breakfast = new Breakfast(coffee.stand, scene);
 let coffeeBoost = 0;     // stamina from a sip, still working its way in
 const avatar = new Character(scene, settings.hero);
 const partner = new Character(scene, PARTNER);
@@ -178,7 +180,7 @@ function parkATV() {
 function save() {
   const data = {
     x: hiker.pos.x, z: hiker.pos.z, yaw: hiker.yaw, hour: state.hour, day: state.day, km: state.km,
-    atv: { x: atv.pos.x, z: atv.pos.z, yaw: atv.yaw }, fish: fishing.save(), roast: { eaten: roast.eaten, perfect: roast.perfect }, wood: wood.save(), coffee: coffee.save(),
+    atv: { x: atv.pos.x, z: atv.pos.z, yaw: atv.yaw }, fish: fishing.save(), roast: { eaten: roast.eaten, perfect: roast.perfect }, wood: wood.save(), coffee: coffee.save(), breakfast: breakfast.save(),
     discovered: [...state.discovered], camp: camp.save(), companion: companion.save(),
     stamina: hiker.stamina, warmth: hiker.warmth, weather: weather.save(),
   };
@@ -197,6 +199,7 @@ function restore() {
   roast.eaten = s.roast?.eaten || 0; roast.perfect = s.roast?.perfect || 0;
   wood.load(s.wood);
   coffee.load(s.coffee);
+  breakfast.load(s.breakfast);
   camp.load(s.camp);
   wood.setCamp(camp.tent);
   companion.load(s.companion, hiker.pos);
@@ -392,7 +395,7 @@ function renderControls(el) {
   el.innerHTML = [
     col('Keyboard &amp; mouse', [[k('W') + k('A') + k('S') + k('D'), 'Walk'], ['Mouse', 'Look'], [k('Shift'), 'Hike fast'], [k('Space'), 'Hop'],
       [k('E'), 'Grab rock / let go'], [k('C'), 'Pitch / pack tent'], [k('F'), 'Campfire'], [k('Z'), 'Sleep at tent · hold to rest'],
-      [k('L'), 'Headlamp'], [k('G'), 'Do something together'], [k('R'), 'Ride the ATV / get off'], [k('T'), 'Cast a line / reel in'], [k('X'), 'Chop a tree / saw a log (hold)'], [k('B'), 'Drop your firewood'], [k('K'), 'Make coffee at the fire'], [k('H'), 'Sip your coffee'], [k('R'), 'Sit on a stool · take or stack firewood'], [k('Q'), 'Roast a marshmallow / eat it'], [k('V'), 'First / third person'], [k('M'), 'Map &amp; quick travel'], [k('Esc'), 'Pause']]),
+      [k('L'), 'Headlamp'], [k('G'), 'Do something together'], [k('R'), 'Ride the ATV / get off'], [k('T'), 'Cast a line / reel in'], [k('X'), 'Chop a tree / saw a log (hold)'], [k('B'), 'Drop your firewood'], [k('K'), 'Camp cooking: coffee, then bacon and eggs'], [k('H'), 'Sip your coffee'], [k('R'), 'Sit on a stool · take or stack firewood'], [k('Q'), 'Roast a marshmallow / eat it'], [k('V'), 'First / third person'], [k('M'), 'Map &amp; quick travel'], [k('Esc'), 'Pause']]),
     col('Xbox controller', [[p('LS'), 'Walk'], [p('RS'), 'Look'], [p('RT'), 'Hike fast'], [p('A', 'a'), 'Hop'], [p('B', 'b'), 'Grab rock / let go'],
       [p('X', 'x'), 'Pitch / pack tent'], [p('RB'), 'Campfire'], [p('LT'), 'Rest / sleep'], [p('LB'), 'Headlamp'], [p('↑'), 'Do something together'], [p('↓'), 'Cast a line / reel in'], [p('←'), 'Roast a marshmallow / eat it, or sip coffee away from the fire'], [p('→'), 'Chop / saw (hold)'], [p('L3'), 'Drop your firewood'], [p('Y', 'y'), 'Ride / get off the ATV'], [p('R3'), 'Camera'],
       [p('View'), 'Map &amp; quick travel'], [p('Menu'), 'Pause · menus: D-pad, ' + p('A', 'a') + ' ' + p('B', 'b')]]),
@@ -1188,15 +1191,16 @@ function tick(dt, draw = true) {
       const dStool = si >= 0 ? Math.hypot(camp.stools[si].x - p.x, camp.stools[si].z - p.z) : Infinity;
       const dAtv = atv.near(p) ? Math.hypot(atv.pos.x - p.x, atv.pos.z - p.z) : Infinity;
       const dWood = Math.min(wood.stackDist(p), wood.carried > 0 || wood.campCount > 0 ? wood.pileDist(p) : Infinity);
-      const dCof = coffee.reach(p, hiker.yaw);
+      const dCof = coffee.reach(p, hiker.yaw), dBrk = breakfast.reach(p, hiker.yaw);
       if (atv.riding) dismountATV();
+      else if (dBrk < dCof && !fishing.busy && hiker.mode === 'walk') { if (breakfast.interact()) save(); }
       else if (dCof < Infinity && !fishing.busy && hiker.mode === 'walk') { if (coffee.interact(p)) save(); }
       else if (dWood < 3.2 && dWood < dStool && dWood < dAtv && !fishing.busy) { const r = wood.interact(p); if (r) save(); }
       else if (!fishing.busy && hiker.mode === 'walk' && hiker.grounded && dStool < dAtv && dStool < Infinity) sitDown(si);
       else if (dAtv < Infinity && hiker.mode === 'walk' && hiker.grounded) mountATV();
     }
     if (pressed.has('KeyQ') && !atv.riding && !fishing.busy && !state.cut) marshmallow();
-    if (pressed.has('KeyK') && !atv.riding && !fishing.busy && !state.cut && state.seat < 0 && hiker.mode === 'walk' && coffee.rig(camp.fire, hiker.pos)) save();
+    if (pressed.has('KeyK') && !atv.riding && !fishing.busy && !state.cut && state.seat < 0 && hiker.mode === 'walk' && (coffee.rigged ? breakfast.start(true, camp.fire, hiker.pos) : coffee.rig(camp.fire, hiker.pos))) save();
     if (pressed.has('KeyH') && !atv.riding && !fishing.busy && !state.cut && hiker.mode === 'walk' && !state.sleeping) coffee.sip();
     if (pressed.has('KeyB') && !atv.riding && state.seat < 0 && !fishing.busy && !state.cut && wood.drop({ pos: hiker.pos, yaw: hiker.yaw }, rig.mode === 'first' ? hiker.yaw : avatar.heading)) save();
     if (state.cut || fishing.locked) { /* hands full */ } else if (atv.riding || state.seat >= 0) { if (pressed.has('KeyL')) { state.lamp = !state.lamp; audio.step('rock', 0); } state.resting = false; } else act();
@@ -1246,6 +1250,22 @@ function tick(dt, draw = true) {
       first: rig.mode === 'first', camera, seated: state.seat >= 0, minutes: state.paused ? 0 : gameMin,
     });
     camp.fireObj.setTeepee(!coffee.rigged);
+    breakfast.update(state.paused ? 0 : dt, { on: coffee.rigged && !!camp.fire, fire: camp.fire, p: hiker.pos, yaw: hiker.yaw, seated: state.seat >= 0, coffeeReach: coffee.reach(hiker.pos, hiker.yaw) });
+    for (const e of breakfast.events) {
+      if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
+      else if (e.type === 'sound') audio[e.name]?.();
+      else if (e.type === 'ready') {
+        audio.ready();
+        hud.discovery('Breakfast is ready', 'Bacon and eggs, hot off the grate', 'Cooked');
+        if (Math.hypot(companion.pos.x - hiker.pos.x, companion.pos.z - hiker.pos.z) < 12) companion.speak('That smells amazing. Save me some!', 30);
+      } else if (e.type === 'eat') {
+        audio.sip();
+        coffeeBoost += 45 * e.q; hiker.warmth = Math.min(100, hiker.warmth + 12 * e.q);
+        hud.discovery(e.label, `Breakfast ${breakfast.eaten}`, 'You ate');
+        companion.event('smore');
+        save();
+      }
+    }
     for (const e of coffee.events) {
       if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
       else if (e.type === 'sound') audio[e.name]?.();
@@ -1387,7 +1407,8 @@ function tick(dt, draw = true) {
     else if (fishing.hint) hint = fishing.hint;
     else if (roast.active) hint = roast.hint;
     else if (wood.hint) hint = wood.hint;
-    else if (coffee.hint) hint = coffee.hint;
+    else if (breakfast.hint) hint = breakfast.hint;
+    else if (coffee.hint || breakfast.tip) hint = [coffee.hint, breakfast.tip].filter(Boolean).join('  ·  ');
     else if (state.seat >= 0) hint = (camp.fire ? '[R] stand up  ·  [Q] roast a marshmallow' : '[R] stand up') + (coffee.cup.sips > 0 ? '  ·  [H] sip coffee' : '');
     else if (!hint && !atv.riding && freeStool(p) >= 0) hint = '[R] sit on the stool';
     else if (!hint && camp.fire && Math.hypot(camp.fire.x - p.x, camp.fire.z - p.z) < 3.8 && !fishing.busy) hint = '[Q] roast a marshmallow';
@@ -1471,7 +1492,7 @@ if (DEV) {
     look(yaw, pitch = 0) { hiker.yaw = yaw; hiker.pitch = pitch; },
     press(code) { pressed.add(code); },
     map() { toggleMap(); },
-    gmap: map, companion, coffee, dump, grass, horizon, CULL, atv, fishing, sky, roast, camp, wood, sitDown, standUp, smash, askSmash, answerAsk, startScene, mountATV, dismountATV,
+    gmap: map, companion, coffee, dump, breakfast, grass, horizon, CULL, atv, fishing, sky, roast, camp, wood, sitDown, standUp, smash, askSmash, answerAsk, startScene, mountATV, dismountATV,
     travel(name) { if (!map.open) toggleMap(); const i = map.list.findIndex((d) => d.name === name); if (i >= 0) { map.pick(i); map.travel(); } return i; },
     hold(code, on = true) { if (on) keys.add(code); else keys.delete(code); },
     step(n = 1, dt = 1 / 60) { for (let i = 0; i < n; i++) tick(dt, i === n - 1); },
