@@ -190,7 +190,7 @@ function particles(count, vert, extra, blending, order, map = SPRITE) {
 }
 
 /** Bark: dark furrows lengthwise. */
-function barkTexture() {
+export function barkTexture() {
   const cv = document.createElement('canvas');
   cv.width = 128; cv.height = 256;
   const g = cv.getContext('2d');

@@ -17,7 +17,7 @@ const PAD = {
   7: 'ShiftLeft',  // RT: hike fast
   8: 'KeyM',       // Back: map
   9: 'Escape',     // Start: pause
-  10: 'ShiftLeft', // L3: hike fast
+  10: 'KeyB',      // L3: drop what you're carrying
   11: 'KeyV',      // R3: camera
 };
 const NAMES = ['A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'Back', 'Start', 'L3', 'R3', 'Up', 'Down', 'Left', 'Right', 'Guide'];
@@ -163,6 +163,8 @@ export class Input {
       <div class="t-top">
         <button data-code="KeyT">Fish</button>
         <button data-code="KeyQ">Roast</button>
+        <button data-code="KeyX" data-hold>Chop</button>
+        <button data-code="KeyB">Drop</button>
         <button data-code="KeyG">Pal</button>
         <button data-code="KeyL">Lamp</button>
         <button data-code="KeyV">Cam</button>

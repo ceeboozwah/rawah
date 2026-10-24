@@ -9,8 +9,8 @@ const $ = (id) => document.getElementById(id);
 const ft = (m) => Math.round(m * 3.28084).toLocaleString();
 
 // keyboard key -> [pad button, style] and touch label
-const PAD = { Space: ['A', 'a'], E: ['B', 'b'], C: ['X', 'x'], V: ['R3'], L: ['LB'], F: ['RB'], Z: ['LT'], Shift: ['RT'], M: ['View'], Tab: ['View'], G: ['↑'], T: ['↓'], Q: ['←'], R: ['Y', 'y'], Esc: ['Menu'], Enter: ['A', 'a'] };
-const TOUCH = { Space: 'Hop', E: 'Grab', C: 'Camp', F: 'Fire', Z: 'Rest', L: 'Lamp', V: 'Cam', M: 'Map', G: 'Pal', T: 'Fish', Q: 'Roast', R: 'Ride', Tab: 'Map', Shift: 'Fast', Esc: 'Pause', Enter: 'Travel' };
+const PAD = { Space: ['A', 'a'], E: ['B', 'b'], C: ['X', 'x'], V: ['R3'], L: ['LB'], F: ['RB'], Z: ['LT'], Shift: ['RT'], M: ['View'], Tab: ['View'], G: ['↑'], T: ['↓'], Q: ['←'], X: ['→'], B: ['L3'], R: ['Y', 'y'], Esc: ['Menu'], Enter: ['A', 'a'] };
+const TOUCH = { Space: 'Hop', E: 'Grab', C: 'Camp', F: 'Fire', Z: 'Rest', L: 'Lamp', V: 'Cam', M: 'Map', G: 'Pal', T: 'Fish', Q: 'Roast', X: 'Chop', B: 'Drop', R: 'Ride', Tab: 'Map', Shift: 'Fast', Esc: 'Pause', Enter: 'Travel' };
 const esc = (t) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
 /** HTML for one key in the current input mode. */

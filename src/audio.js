@@ -128,6 +128,48 @@ export class Audio {
     if (surface === 'gravel' || surface === 'rock') this.#burst(0.05, f * 1.8, 3, g * 0.5 * v, 'bandpass', 0.03);
   }
 
+  /** An axe biting into wood: a hard knock with a hollow body. */
+  chop() {
+    if (!this.ctx) return;
+    this.#burst(0.09, 380, 1.4, 0.55, 'bandpass');
+    this.#burst(0.22, 140, 0.8, 0.5, 'lowpass', 0.005, this.noise);
+    this.#burst(0.05, 2400, 2.2, 0.18, 'bandpass', 0.002);
+  }
+
+  /** A saw working through a log. */
+  saw() {
+    if (!this.ctx) return;
+    for (let i = 0; i < 3; i++) this.#burst(0.14, 1800 + Math.random() * 900, 0.9, 0.16, 'bandpass', i * 0.16);
+  }
+
+  /** A tree's trunk giving way. */
+  creak() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime, o = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter();
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(70, t); o.frequency.exponentialRampToValueAtTime(130, t + 0.5); o.frequency.exponentialRampToValueAtTime(50, t + 1.1);
+    f.type = 'bandpass'; f.frequency.value = 420; f.Q.value = 5;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.28, t + 0.15); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.15);
+    o.connect(f).connect(g).connect(this.master);
+    o.start(t); o.stop(t + 1.2);
+    this.#burst(0.9, 900, 0.6, 0.12, 'bandpass', 0.1);
+  }
+
+  /** The crown hitting the ground. */
+  crash() {
+    if (!this.ctx) return;
+    this.#burst(0.9, 120, 0.7, 0.95, 'lowpass', 0, this.noise);
+    this.#burst(0.5, 700, 0.5, 0.35, 'bandpass', 0.03);
+    this.#burst(0.35, 90, 0.8, 0.8, 'lowpass', 0.06, this.noise);
+  }
+
+  /** A log landing on a stack. */
+  clunk() {
+    if (!this.ctx) return;
+    this.#burst(0.1, 260, 1.2, 0.4, 'bandpass');
+    this.#burst(0.12, 90, 0.8, 0.3, 'lowpass', 0.01, this.noise);
+  }
+
   thud(big) {
     if (!this.ctx) return;
     this.#burst(big ? 0.45 : 0.2, 160, 0.8, big ? 0.7 : 0.35, 'lowpass', 0, this.noise);

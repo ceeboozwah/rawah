@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { hash2 } from './noise.js';
 import { buildSpecies, paintAtlas, foliageMaterial, foliageDepth, bakeImpostors, impostorGeometry, impostorMaterial } from './trees.js';
 import { CULL, expandedFrustum, sphereInView } from './culling.js';
+import { barkTexture } from './fire.js';
 
 // Trees, burned snags, downed logs, krummholz, willows and boulders around the
 // hiker. Placement is a jittered grid driven by World.cover(), which reads the
@@ -18,6 +19,11 @@ const TREES = ['spruce', 'lodgepole', 'aspen', 'snag', 'krumm', 'willow'];
 const KINDS = [...TREES, 'boulder', 'log'];
 const CAP = { spruce: 4000, lodgepole: 3000, aspen: 2000, snag: 3000, krumm: 3000, willow: 1500, boulder: 6000, log: 4000 };
 const IMP_CAP = 140000;
+const STUMP_CAP = 1500;
+const CHOPPABLE = ['spruce', 'lodgepole', 'aspen', 'snag'];
+/** Trunk radius at the base for each kind at scale 1 (the same numbers trees.js builds with). */
+export const TRUNK_R = { spruce: 0.26, lodgepole: 0.24, aspen: 0.17, snag: 0.22 };
+const treeKey = (x, z) => `${x.toFixed(2)},${z.toFixed(2)}`;
 // Culling. The buffers are refilled only when the view has turned ROT_REFILL or moved
 // REFILL_M, so the frustum used to fill them is wider than the camera's by CULL.margin
 // (culling.js), which must stay above ROT_REFILL.
@@ -51,7 +57,7 @@ export class Flora {
     this.uniforms = { uTime: { value: 0 }, uCalm: { value: 0.6 } };
     const atlas = paintAtlas(leaves);
     this.species = buildSpecies();
-    const foliage = foliageMaterial(atlas, this.uniforms);
+    const foliage = this.foliage = foliageMaterial(atlas, this.uniforms);
     const depth = foliageDepth(atlas, this.uniforms);
     this.impostors = bakeImpostors(renderer, this.species, foliage, impostor);
 
@@ -90,6 +96,16 @@ export class Flora {
     this.imp.count = 0;
     this.imp.frustumCulled = false;
     this.group.add(this.imp);
+
+    // felled trees stay felled: a set of placement keys that #populate skips, and the stumps they leave
+    this.felled = new Map();      // key -> [x, z, e, radius]
+    const bark = barkTexture();
+    const stumpMat = [new THREE.MeshLambertMaterial({ map: bark }), new THREE.MeshLambertMaterial({ color: 0xcfa468 }), new THREE.MeshLambertMaterial({ map: bark })];
+    this.stumps = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1.12, 1, 10), stumpMat, STUMP_CAP);
+    this.stumps.count = 0;
+    this.stumps.frustumCulled = false;
+    this.stumps.castShadow = this.stumps.receiveShadow = true;
+    this.group.add(this.stumps);
 
     this.tile = Math.max(8, Math.round(TILE_M / world.cell));
     this.nt = Math.ceil(world.N / this.tile);
@@ -194,6 +210,7 @@ export class Flora {
         else if (e < 2780 && cv.meadow > 0.6 && cv.grade < 0.08 && r1 > 0.93) kind = 'willow';
         else if (r1 > 1 - (cv.rock * 0.05 + cv.alpine * 0.004)) kind = 'boulder';
         if (!kind) continue;
+        if (this.felled.size && this.felled.has(treeKey(x, z))) continue;
         const lake = w.lakeAt(x, z);
         if (lake && e < lake.level + 0.7) continue;
         const near = w.nearestTrail(x, z);
@@ -319,6 +336,98 @@ export class Flora {
     imp.instanceMatrix.needsUpdate = true;
     imp.instanceColor.needsUpdate = true;
     imp.geometry.attributes.aCell.needsUpdate = true;
+  }
+
+  // ---------------------------------------------------------------- felling
+  /** The tree in front of you within reach, as a reference, or null. */
+  treeAt(p, yaw, reach = 3.2) {
+    const w = this.world, size = this.tile * w.cell;
+    const [ti, tj] = this.tileKey(p.x, p.z);
+    const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+    let best = null, bs = Infinity;
+    for (let j = tj - 1; j <= tj + 1; j++) {
+      for (let i = ti - 1; i <= ti + 1; i++) {
+        const tile = this.tiles.get(j * this.nt + i);
+        if (!tile) continue;
+        for (const kind of CHOPPABLE) {
+          const list = tile.items[kind];
+          for (let k = 0; k < list.length; k += 5) {
+            const x = list[k], z = list[k + 2], s = list[k + 3];
+            const dx = x - p.x, dz = z - p.z, d = Math.hypot(dx, dz), edge = d - TRUNK_R[kind] * s;
+            if (edge > reach || d < 0.05) continue;
+            const facing = (dx * fx + dz * fz) / d;
+            if (facing < 0.55) continue;
+            const score = edge - facing * 1.2;
+            if (score < bs) { bs = score; best = { tile, kind, k, x, e: list[k + 1], z, s, r: list[k + 4], d }; }
+          }
+        }
+      }
+    }
+    return best;
+  }
+
+  /** Take a tree out of the forest, leaving a stump. Returns what the falling tree needs. */
+  fell(ref) {
+    const list = ref.tile.items[ref.kind];
+    // find it again (the lists may have been rebuilt): same position
+    let k = -1;
+    for (let q = 0; q < list.length; q += 5) if (list[q] === ref.x && list[q + 2] === ref.z) { k = q; break; }
+    if (k < 0) return null;
+    list.splice(k, 5);
+    const sol = ref.tile.solids;
+    for (let q = 0; q < sol.length; q += 4) {
+      if (Math.abs(sol[q] - ref.x) < 1e-3 && Math.abs(sol[q + 1] - ref.z) < 1e-3 && sol[q + 3] === Infinity) {
+        const next = new Float32Array(sol.length - 4);
+        next.set(sol.subarray(0, q)); next.set(sol.subarray(q + 4), q);
+        ref.tile.solids = next;
+        break;
+      }
+    }
+    const rad = TRUNK_R[ref.kind] * ref.s;
+    this.#addStump(ref.x, ref.e, ref.z, rad);
+    this.felled.set(treeKey(ref.x, ref.z), [ref.x, ref.z, ref.e, rad]);
+    this.dirty = true;
+    const variants = this.species[ref.kind];
+    const vi = Math.floor(((ref.r * 7.31) % 1) * variants.length);
+    return { geo: variants[vi], rot: ref.r * Math.PI * 2, kind: ref.kind, x: ref.x, e: ref.e - 0.15, z: ref.z, s: ref.s, rad };
+  }
+
+  #addStump(x, e, z, rad) {
+    const n = this.stumps.count;
+    if (n >= STUMP_CAP) return;
+    const m = new THREE.Matrix4().makeScale(rad, 0.42, rad).setPosition(x, e + 0.18, z);
+    this.stumps.setMatrixAt(n, m);
+    this.stumps.count = n + 1;
+    this.stumps.instanceMatrix.needsUpdate = true;
+  }
+
+  /** What has been felled, for saving: [x, z, ground, radius]. */
+  felledList() { return [...this.felled.values()]; }
+
+  /** Put a saved set of felled trees back: out of the forest, stumps in. */
+  applyFelled(list) {
+    for (const [x, z, e, rad] of list || []) {
+      const key = treeKey(x, z);
+      if (this.felled.has(key)) continue;
+      this.felled.set(key, [x, z, e, rad]);
+      this.#addStump(x, e, z, rad);
+      for (const tile of this.tiles.values()) {
+        for (const kind of CHOPPABLE) {
+          const arr = tile.items[kind];
+          for (let q = 0; q < arr.length; q += 5) if (treeKey(arr[q], arr[q + 2]) === key) { arr.splice(q, 5); q -= 5; }
+        }
+        const sol = tile.solids;
+        for (let q = 0; q < sol.length; q += 4) {
+          if (Math.abs(sol[q] - x) < 1e-3 && Math.abs(sol[q + 1] - z) < 1e-3 && sol[q + 3] === Infinity) {
+            const next = new Float32Array(sol.length - 4);
+            next.set(sol.subarray(0, q)); next.set(sol.subarray(q + 4), q);
+            tile.solids = next;
+            break;
+          }
+        }
+      }
+    }
+    this.dirty = true;
   }
 
   /** Push a circle of radius r out of trunks and boulders; returns ground lift from boulder tops. */

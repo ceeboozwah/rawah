@@ -56,7 +56,8 @@ function stoolMesh() {
   return g;
 }
 
-const FUEL = 300;        // game minutes a fire burns
+const FUEL = 180;        // game minutes the logs you start a fire with burn
+const FUEL_MAX = 360;    // and the most it will hold
 const STOOL_R = 1.4;     // how far from the fire the stools sit
 
 export class Camp {
@@ -147,15 +148,21 @@ export class Camp {
     if (!this.tent || Math.hypot(this.tent.x - x, this.tent.z - z) > 12) return 'Build a fire at your camp.';
     if (Math.hypot(this.tent.x - x, this.tent.z - z) < 3.2) return 'Too close to the tent — build the fire a few steps away.';
     if (w.height(x, z) > w.treeline(x, z) - 20) return 'No deadfall up here — you are above treeline.';
-    if (!this.flora.treeNear(x, z, 45)) return 'No firewood nearby.';
     return null;
   }
 
   light(x, z) {
-    this.fire = { x, z, life: FUEL }; // game minutes of fuel
+    this.fire = { x, z, life: FUEL }; // game minutes of fuel (three logs' worth)
     this.fireObj.group.position.set(x, this.world.height(x, z), z);
     this.fireObj.visible = true;
     this.#setStools(x, z);
+  }
+
+  /** A log on the fire: an hour more, up to six hours' worth. False if it is already full. */
+  addFuel(minutes = 60) {
+    if (!this.fire || this.fire.life > FUEL_MAX - 20) return false;
+    this.fire.life = Math.min(FUEL_MAX, this.fire.life + minutes);
+    return true;
   }
 
   douse() {
