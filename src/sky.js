@@ -65,7 +65,7 @@ float noise(vec3 x) {
 // how much cloud one slice of the slab holds at a point: its footprint matches the shadows on the ground,
 // shrinking with height so the tops are smaller than the bases, and eroded so the edges billow
 float slab(vec2 P, float k, float dist) {
-  P += vec2(k * 130.0, k * -85.0);            // wind shear: towers lean downwind as they climb
+  P += vec2(k * 80.0, k * -55.0);             // wind shear: towers lean downwind as they climb
   float th = mix(0.74, 0.2, uCloudCover) + k * (0.07 + 0.2 * (1.0 - uThick));
   float far = smoothstep(18000.0, 60000.0, dist);     // fine detail turns to streaks at a grazing angle: let it go with distance
   float f = cloudFbm(P, far > 0.5 ? 2 : 4) + (texture2D(uCloudTex, cloudRot2((P + uCloudOff) / 2600.0) + k * 0.37).r - 0.5) * 0.1 * (0.5 + k) * (1.0 - far);
@@ -81,15 +81,19 @@ void main() {
   vec3 col = mix(uHorizon, uZenith, pow(clamp(h, 0.0, 1.0), 0.5));
   col = mix(col, uHorizon * 0.55, smoothstep(0.0, -0.25, h));
   float sd = max(dot(d, uSun), 0.0);
-  col += uGlow * (pow(sd, 6.0) * (0.1 + 0.18 * uSunVis) + pow(sd, 48.0) * 0.45 * uSunVis) * (1.0 - 0.5 * smoothstep(0.0, 0.5, h)) * (1.0 - 0.75 * uThick * uCloudCover);
+  col += uGlow * (pow(sd, 36.0) * (0.04 + 0.08 * uSunVis) + pow(sd, 260.0) * 0.8 * uSunVis) * (1.0 - 0.5 * smoothstep(0.0, 0.5, h)) * (1.0 - 0.75 * uThick * uCloudCover);
   // cirrus: thin streaks high up, stretched along the wind, most of what you see on a clear day
   if (h > 0.03) {
     float ht = 9000.0 - cameraPosition.y;
     vec2 P = cameraPosition.xz + d.xz * ht / h;
     vec2 q = (P + uCloudOff * 1.6) / vec2(42000.0, 17000.0);
-    float s = texture2D(uCloudTex, cloudWarp(q)).r * 0.62 + texture2D(uCloudTex, cloudRot1(q) * vec2(2.9, 1.8) + 0.4).r * 0.38;
-    float ci = smoothstep(0.6, 0.86, s) * (0.7 - 0.6 * uCloudCover * uThick) * smoothstep(0.03, 0.22, h) * exp(-(ht / h) / 170000.0);
-    col = mix(col, mix(uCloudLit, vec3(1.0), 0.35) + uGlow * pow(sd, 4.0) * 0.5, ci * 0.38 * (1.0 - uNight * 0.85));
+    // cirrus gathers into streamers, not an even film: a slow field bunches and shears it
+    float stream = texture2D(uCloudTex, cloudRot3(q * 0.6 + 0.17 + uCloudOff * 0.00003)).r;
+    vec2 qq = cloudWarp(q + vec2(stream * 0.18, 0.0));
+    float s = texture2D(uCloudTex, qq).r * 0.62 + texture2D(uCloudTex, cloudRot1(qq) * vec2(2.9, 1.8) + 0.4).r * 0.38;
+    s *= 0.3 + stream;   // carve harder: filaments where the streamer field says, not an even film
+    float ci = smoothstep(0.62, 0.88, s) * (0.7 - 0.6 * uCloudCover * uThick) * smoothstep(0.03, 0.22, h) * exp(-(ht / h) / 170000.0);
+    col = mix(col, mix(uCloudLit, vec3(1.0), 0.35) + uGlow * pow(sd, 8.0) * 0.3, ci * 0.38 * (1.0 - uNight * 0.85));
   }
   // clouds: a slab of cumulus cut into slices. Lower slices are wider and darker (the flat grey base),
   // higher ones shrink to billowing tops; each slice looks toward the sun to see what shades it
@@ -110,7 +114,7 @@ void main() {
         float billow = 0.72 + 0.56 * texture2D(uCloudTex, cloudRot3((P + uCloudOff) / 1700.0) + 0.2).r;
         float lit = clamp((1.0 - occ * (0.5 + 0.4 * uThick)) * (0.38 + 0.62 * k) * billow, 0.0, 1.0);
         vec3 c = mix(uCloudDark, uCloudLit, lit) * (1.0 - 0.45 * uThick * uCloudCover);   // storm decks are dark steel
-        c += uGlow * pow(sd, 5.0) * (1.0 - dn) * dn * 2.0 * (1.0 - uNight) * lit;     // silver lining
+        c += uGlow * pow(sd, 6.0) * (1.0 - dn) * dn * 1.2 * (1.0 - uNight) * lit;     // silver lining
         c += vec3(0.7, 0.75, 0.95) * uFlash * (0.5 + dn);
         for (int q = 0; q < 3; q++) {   // a flash inside the cloud lights the cloud around it, broad and blue-white
           float bw = uBoltDir[q].w;
@@ -126,7 +130,7 @@ void main() {
     cloud = (1.0 - trans) * fade;
   }
   for (int q = 0; q < 3; q++) { float bw = uBoltDir[q].w; if (bw > 0.0) col += uBoltCol[q] * bw * pow(max(dot(d, uBoltDir[q].xyz), 0.0), 14.0) * 0.1 * (1.0 - cloud); }
-  col += vec3(1.0, 0.96, 0.88) * smoothstep(0.99955, 0.9998, sd) * 6.0 * (1.0 - cloud);
+  col += vec3(1.0, 0.96, 0.88) * smoothstep(0.99955, 0.9998, sd) * 4.5 * (1.0 - cloud);
   if (uNight > 0.0) {
     // the Milky Way, baked in galactic coordinates and turned to the sky overhead (dimmer toward the horizon, where the air is thick)
     vec3 mwc = textureCube(uMW, uGal * d).rgb;
@@ -223,7 +227,7 @@ export class Sky {
     const grey = (c, k) => { const l = c.r * 0.3 + c.g * 0.55 + c.b * 0.15; return c.lerp(this._b.setRGB(l, l * 1.02, l * 1.06), k); };
     grey(u.uZenith.value, overcast * 0.7).multiplyScalar(1 - overcast * 0.12);
     grey(u.uHorizon.value, overcast * 0.7).multiplyScalar(1 - overcast * 0.04);
-    u.uGlow.value.multiplyScalar(1 - overcast * 0.7);
+    u.uGlow.value.multiplyScalar(0.85).multiplyScalar(1 - overcast * 0.7);
     u.uThick.value = wx.thick;
     u.uFlash.value = wx.flash;
     const lit = smoothstep(-0.1, 0.25, s);

@@ -16,6 +16,7 @@ import { Hiker } from './hiker.js';
 import { Camp } from './camp.js';
 import { Hud, keyCap } from './hud.js';
 import { GameMap } from './map.js';
+import { Route } from './route.js';
 import { Audio } from './audio.js';
 import { Input } from './input.js';
 import { CameraRig } from './camera.js';
@@ -252,7 +253,8 @@ if (yours) { world.carSpot = { x: yours.x, z: yours.z }; world.startSpot = yours
   const cy = s0.yaw ?? 0, rx = -Math.cos(cy), rz = Math.sin(cy), cs = world.carSpot || s0;
   let px = cs.x + rx * 3.4, pz = cs.z + rz * 3.4;
   if (world.lakeAt(px, pz) || world.localGrade(px, pz) > 0.3) { px = cs.x - rx * 3.4; pz = cs.z - rz * 3.4; }
-  atv.place(px, pz, cy);
+  if (parked && parked.quad) atv.place(parked.quad.x, parked.quad.z, parked.quad.yaw);
+  else atv.place(px, pz, cy);
 }
 const avatar = new Character(scene, playerName);
 const party = new Party(world, flora, scene, avatar.lib, playerName);   // the other two friends
@@ -284,6 +286,10 @@ const flare = new LensFlare();
 flare.on = settings.flare;
 const mist = new Mist(world);                                  // the air the boxels hold (src/shafts.js)
 const shafts = new Shafts(scene, world, { slices: Q.shafts || 18, terrain: terrain.uniforms });   // volumetric god rays: shadow-tested slices, boxel-density air
+// every certified field in the valley, on the one substrate (src/cells.js):
+// ground moisture/wear, water silt/foam, valley mist, campfire smoke and heat
+const fields = { ground: boxels, water: waterCells.b, mist: mist.b, smoke: plume.smoke, heat: plume.heat };
+fields.stats = () => { const s = { awake: 0, events: 0, violations: 0, merged: 0, retired: 0, ms: 0, per: {} }; for (const [k, f] of Object.entries(fields)) if (f.stats) { s.awake += f.awakeN; s.violations += f.stats.violations; s.merged += f.stats.merged; s.retired += f.stats.retired; s.ms += f.stats.ms || 0; s.events += f.stats.events + (f.sources ? f.sources.size : 0); s.per[k] = { awake: f.awakeN, live: f.stats.live, ms: +(f.stats.ms || 0).toFixed(4) }; } return s; };
 shafts.on = settings.shafts && Q.shafts >= 0;
 let smokeToast = -99;
 const _pw = new THREE.Vector3();
@@ -301,6 +307,7 @@ const checkpoints = world.places.filter((q) => q.kind === 'trailhead').map((q, i
 }));
 const guide = new Guide(checkpoints);
 const map = new GameMap(world, guide);
+const route = new Route(world, scene);
 const audio = new Audio();
 props.hud = hud; props.audio = audio; mind.audio = audio;
 party.onSwing = (x, y, z, nx, nz) => props.swingFx(x, y, z, nx, nz);
@@ -474,13 +481,22 @@ function toggleMap() {
   document.body.classList.add('map-open');
   const pad = (b, cls = '') => `<span class="key pad ${cls}">${b}</span>`;
   $('map-hint').innerHTML = input.mode === 'pad'
-    ? `<span>${pad('LS')} cursor</span><span>${pad('LT')}${pad('RT')} zoom</span><span>${pad('LB')}${pad('RB')} filter</span><span>${pad('A', 'a')} travel</span><span>${pad('Y', 'y')} find me</span><span>${pad('B', 'b')} close</span>`
+    ? `<span>${pad('LS')} cursor</span><span>${pad('LT')}${pad('RT')} zoom</span><span>${pad('LB')}${pad('RB')} filter</span><span>${pad('A', 'a')} hike</span><span>${pad('Y', 'y')} find me</span><span>${pad('B', 'b')} close</span>`
     : input.mode === 'touch' ? '<span>Tap a place · drag to pan · pinch to zoom</span>'
-      : `<span>Click a place · drag to pan · scroll to zoom</span><span>${keyCap('/', 'kbm')} search</span><span>${keyCap('Enter', 'kbm')} travel</span><span>${keyCap('M', 'kbm')} close</span>`;
+      : `<span>Click a place · drag to pan · scroll to zoom</span><span>${keyCap('/', 'kbm')} search</span><span>${keyCap('Enter', 'kbm')} start hike</span><span>${keyCap('M', 'kbm')} close</span>`;
   if (document.pointerLockElement) document.exitPointerLock();
 }
 map.onClose = () => { if (map.open) toggleMap(); };
 map.onTravel = (d) => startTravel(d);
+map.onHike = (d) => {
+  document.body.classList.remove('map-open');
+  lockPointer();
+  if (route.on && route.dest.name === d.name) { route.clear(); map.route = null; hud.toast('Route cleared'); return; }
+  const len = route.go(hiker.pos, d);
+  map.route = route;
+  hud.toast(`Route set to ${d.name} · ${len < 950 ? `${Math.round(len / 10) * 10} m` : `${(len / 1000).toFixed(1)} km`}`);
+};
+route.onArrive = (name) => { map.route = null; hud.toast(`You made it to ${name}`); };
 $('btn-map').onclick = () => { pause(false); toggleMap(); };
 $('btn-guide').onclick = () => { pause(false); toggleMap(); map.guideTab(); };
 
@@ -887,6 +903,8 @@ function act() {
       else if (dCof < Infinity) { if (coffee.interact(p)) save(); }
       else if (dWood < 3.2 && dWood < dStool && dWood < dAtv) { if (wood.interact(p)) save(); }
       else if (dAtv < dStool && dAtv < Infinity) mountATV();
+      else if (party.hold) party.release();
+      else if (party.engageable(p, hiker.yaw)) party.engage(party.engageable(p, hiker.yaw));
       else if (si >= 0) sitDown(si);
     }
   } else if (state.seat >= 0 && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((k) => pressed.has(k))) standUp();
@@ -1623,6 +1641,7 @@ function tick(dt, draw = true) {
   input.move(ctl.move);
   if (map.open) map.analog(dt, input.padMove, input.padLook, input.trigger(6), input.trigger(7));
   if (!live) ctl.move.set(0, 0);
+  route.update(dt, hiker.pos, t);
   ctl.sprint = keys.has('ShiftLeft') || keys.has('ShiftRight');
   ctl.jump = live && pressed.has('Space');
   const mindOn = hiker.tool === 'mind';
@@ -1862,7 +1881,7 @@ function tick(dt, draw = true) {
   { const f = calendar.foliage; TONE.uFresh.value = f.fresh; TONE.uAutumn.value = f.autumn; TONE.uDrop.value = f.drop; TONE.uCold.value = f.cold; }
   // cold air pools in the valleys at dawn and burns off by midmorning; wet ground breathes extra mist into it
   const damp = boxels.sample(p.x, p.z).u;
-  atmosphere.uValley.value = 0.00004 * (1 + 2.2 * Math.exp(-((state.hour - 6.6) ** 2) / 4.5) * (1 + damp * 1.4)) * (1 - 0.5 * smoothstep(0.4, 1, weather.cloud));
+  atmosphere.uValley.value = 0.00004 * (1 + 1.6 * Math.exp(-((state.hour - 6.6) ** 2) / 4.5) * (1 + damp * 1.4)) * (1 - 0.5 * smoothstep(0.4, 1, weather.cloud));
   {
     // is the sun behind a ridge? compare the highest skyline angle along the sun's azimuth with the sun's elevation
     const sd = sky.sunDir, hz = Math.hypot(sd.x, sd.z) || 1;
@@ -1888,7 +1907,7 @@ function tick(dt, draw = true) {
   const wspd = 2 + Math.max(0, weather.wind) * 9;
   precip.update(state.paused ? 0 : dt, camera, weather, [WIND_DIR[0] * wspd, WIND_DIR[1] * wspd], precipLight.copy(sky.hemi.color).multiplyScalar(0.2 + sky.light * 0.75 + weather.flash));
   const tC = tempC(h, p.y);
-  grass.clear(camp.fire && [camp.fire.x, camp.fire.z, 1.9], camp.tent && (camp.tent.kind === 'family' ? [camp.tent.x - Math.sin(camp.tent.yaw) * 3.3, camp.tent.z - Math.cos(camp.tent.yaw) * 3.3, camp.tent.x + Math.sin(camp.tent.yaw) * 3.6, camp.tent.z + Math.cos(camp.tent.yaw) * 3.6, 2.3] : [camp.tent.x, camp.tent.z, 3.0]), ...wood.clearings(hiker.pos), ...dump.clearings(hiker.pos), ...gear.clearings());
+  grass.clear(...(world.lot ? world.lot.clear : []), camp.fire && [camp.fire.x, camp.fire.z, 1.9], camp.tent && (camp.tent.kind === 'family' ? [camp.tent.x - Math.sin(camp.tent.yaw) * 3.3, camp.tent.z - Math.cos(camp.tent.yaw) * 3.3, camp.tent.x + Math.sin(camp.tent.yaw) * 3.6, camp.tent.z + Math.cos(camp.tent.yaw) * 3.6, 2.3] : [camp.tent.x, camp.tent.z, 3.0]), ...wood.clearings(hiker.pos), ...dump.clearings(hiker.pos), ...gear.clearings());
   grass.update(camera, hiker, clamp((1.5 - tC) / 4, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0), calendar.cure, avatar.heading, renderer);
   // the ground remembers: footsteps wear it, rain wets it, sun dries it —
   // every event's certified cone decides which cells the sim may skip
@@ -1959,6 +1978,9 @@ function tick(dt, draw = true) {
     if (!hint && state.seat < 0 && camp.fire && Math.hypot(camp.fire.x - p.x, camp.fire.z - p.z) < 3.8 && !fishing.busy) hint = '[U] sit · [N] roast a marshmallow';
     if (!hint && !atv.riding && !fishing.busy && fishing.spotAhead({ pos: p, yaw: hiker.yaw, mode: hiker.mode })) hint = '[B] cast a line';
     if (!hint && !atv.riding && atv.near(p)) hint = '[U] ride the quad';
+    if (!hint && party.hold) hint = `[U] let ${cap(party.hold.a.name)} go`;
+    if (!hint && !atv.riding && hiker.mode === 'walk' && state.seat < 0) { const bud = party.engageable(p, hiker.yaw); if (bud) hint = `[U] talk to ${cap(bud.name)}`; }
+    if (!hint && route.on) hint = `Route to ${route.name} · ${route.left < 950 ? `${Math.round(route.left / 10) * 10} m` : `${(route.left / 1000).toFixed(1)} km`}`;
     if (weather.storm > 0.4 && p.y > cv.treeline - 40) hint = 'Lightning on the crest. Get below treeline.';
     const wxLabel = weather.label;
     if (wxLabel !== state.wxLabel) {
@@ -2032,9 +2054,9 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, hydration, gear, inventory, invUI, smokeCol, flare,
+    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, fields, hydration, gear, inventory, invUI, smokeCol, flare,
     benchPlume(o) { return plume.smoke.bench(o); },
-    begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
+    begin, tick, save, hiker, rig, avatar, party, route, gmap: map, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },
     cam() { return rig.toggle(); },
     teleport(x, z, yaw = hiker.yaw) { hiker.place(x, z, yaw); while (flora.update(hiker.pos, 8) > 0); },
