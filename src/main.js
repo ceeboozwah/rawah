@@ -37,6 +37,7 @@ import { CrewTalk } from './crewtalk.js';
 import { Intro } from './intro.js';
 import { Hydration, relativeHumidity, heatIndexC, heatCategory, BODY_KG } from './hydration.js';
 import { Gear } from './gear.js';
+import { Inventory, InventoryUI, ITEMS } from './inventory.js';
 import { kindOf } from './water.js';
 import { PRESETS, resolveQuality, isTouch, SCALE } from './quality.js';
 import { setRangeK } from './cdlod.js';
@@ -263,7 +264,8 @@ party.onRace = (r) => raceEnded(r);
 const rig = new CameraRig(camera, world, hiker, avatar);
 const hydration = new Hydration();   // the body's water balance (src/hydration.js)
 hydration.pace = settings.hydroPace;
-const gear = new Gear({ scene, camera, avatar, world });   // the canteen and the pump filter (src/gear.js)
+const gear = new Gear({ scene, camera, avatar, world });
+const inventory = new Inventory();   // the canteen and the pump filter (src/gear.js)
 const intro = new Intro(world, scene, camera, models);   // the truck and the car come down the road and park; the friends step out
 // the family tent's walls and floor
 for (const b of [hiker, atv, party]) b.solids = (p, r) => camp.collide(p, r);
@@ -320,7 +322,7 @@ const state = {
   cut: null,     // the scripted walk to the tent
 };
 let hudState = null; // the last thing the HUD showed; the map reads it too
-let frameNo = 0, togetherOpen = false;
+let frameNo = 0, togetherOpen = false, invOpen = false;
 
 function spawnAtCar() {
   const { x, z, toward } = world.startSpot || { ...trailhead, toward: [trailhead.x - 1, trailhead.z] };
@@ -333,7 +335,7 @@ function save() {
     x: hiker.pos.x, z: hiker.pos.z, yaw: hiker.yaw, hour: state.hour, day: state.day, km: state.km,
     discovered: [...state.discovered], camp: camp.save(),
     atv: { x: atv.pos.x, z: atv.pos.z, yaw: atv.yaw }, fish: fishing.save(), roast: { eaten: roast.eaten, perfect: roast.perfect }, wood: wood.save(), coffee: coffee.save(), breakfast: breakfast.save(),
-    stamina: hiker.stamina, warmth: hiker.warmth, hyd: hydration.save(), gear: gear.save(), weather: weather.save(), props: props.save(), sculpt: mind.save(), races: party.races, guide: guide.save(), slept: state.slept || 0,
+    stamina: hiker.stamina, warmth: hiker.warmth, hyd: hydration.save(), gear: gear.save(), inv: inventory.save(), weather: weather.save(), props: props.save(), sculpt: mind.save(), races: party.races, guide: guide.save(), slept: state.slept || 0,
   };
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch { /* private mode */ }
 }
@@ -358,7 +360,7 @@ function restore() {
   if (s.races) party.races = s.races;
   guide.load(s.guide);
   state.slept = s.slept || 0;
-  hydration.load(s.hyd); gear.load(s.gear);
+  hydration.load(s.hyd); gear.load(s.gear); inventory.load(s.inv); applySelection(false);
   mind.load(s.sculpt);
   shaped({ x0: -Infinity, z0: -Infinity, x1: Infinity, z1: Infinity });
   return true;
@@ -381,12 +383,14 @@ input.onPress = (code) => {
     return;
   }
   if (togetherOpen && (code === 'Escape' || code === 'KeyH')) { toggleTogether(false); return; }
+  if (invOpen && (code === 'Escape' || code === 'Tab' || code === 'KeyI')) { toggleInventory(false); return; }
   if (!state.started || state.travel) return;
   if (document.activeElement?.tagName === 'INPUT' && document.activeElement.type === 'search') return;   // typing in the map's search
   if (code === 'Escape' && map.open) { toggleMap(); return; }
-  if ((code === 'KeyM' || code === 'Tab') && !state.paused) toggleMap();
+  if (code === 'KeyM' && !state.paused && !invOpen) toggleMap();
+  if (code === 'Tab' && !state.paused && !map.open) toggleInventory();
   if (code === 'KeyV' && !state.paused && !map.open) hud.toast(rig.toggle() === 'first' ? 'First person' : 'Third person · scroll to zoom');
-  if (code === 'KeyT' && !state.paused && !map.open) props.cycleTool();
+  if (code === 'KeyT' && !state.paused && !map.open && !invOpen) { if (props.carry) hud.toast('Put the stone down first.'); else { inventory.next(); applySelection(); } }
   if (code === 'KeyH' && !state.paused && !map.open) toggleTogether();
   if (code === 'KeyP' && !map.open) swapPlayer();
   if (code === 'Escape' && input.mode !== 'kbm') pause(!state.paused); // keyboard Escape releases pointer lock instead
@@ -410,7 +414,7 @@ input.onPad = (name, stickOnly) => {
 };
 renderer.domElement.addEventListener('click', () => { if (state.started && !state.paused) lockPointer(); });
 document.addEventListener('pointerlockchange', () => {
-  if (document.pointerLockElement !== renderer.domElement && state.started && !map.open && !state.sleeping && !state.travel && !state.intro) pause(true);
+  if (document.pointerLockElement !== renderer.domElement && state.started && !map.open && !invOpen && !state.sleeping && !state.travel && !state.intro) pause(true);
 });
 
 /** Gamepad focus for menus: D-pad or stick moves, A presses, left/right adjusts sliders, B backs out. */
@@ -532,7 +536,7 @@ function begin(fresh) {
     state.discovered = new Set();
     hiker.stamina = hiker.warmth = 100;
     props.reset();
-    hydration.reset(); gear.reset(); smokeCol.reset();
+    hydration.reset(); gear.reset(); smokeCol.reset(); inventory.reset(); applySelection(false);
     party.races = { won: 0, lost: 0 };
     guide.load([]);
     state.slept = 0;
@@ -791,8 +795,9 @@ function containerLabel(name, c) {
 }
 function canteenLabel() {
   if (gear.sel === 'straw') return `LifeStraw · ${gear.straw.litres.toFixed(1)} L drunk through it`;
-  const a = gear.sel === 'bladder' ? ['Bladder', gear.bladder] : ['Canteen', gear.canteen], b = gear.sel === 'bladder' ? ['Canteen', gear.canteen] : ['Bladder', gear.bladder];
-  return `${containerLabel(a[0], a[1])}  ·  ${b[0]} ${b[1].water.toFixed(1)} L`;
+  const cs = { canteen: ['Canteen', gear.canteen], bladder: ['Bladder', gear.bladder], pot: ['Pot', gear.pot] };
+  const [n, c] = cs[gear.sel], rest = Object.keys(cs).filter((k) => k !== gear.sel).map((k) => `${cs[k][0]} ${cs[k][1].water.toFixed(1)} L`).join('  ·  ');
+  return `${containerLabel(n, c)}  ·  ${rest}`;
 }
 
 /** The water in front of you within reach, or null. */
@@ -848,11 +853,11 @@ function hydrationStep(dt, live, p) {
   // what [U] and [Y] would do right now
   if ((hintTick = (hintTick + 1) % 8) === 0) hintWater = gear.act ? null : waterAhead();
   if (live && gear.busy && rig.mode === 'first') hiker.pitch += ((gear.act.kind === 'fill' || gear.act.kind === 'straw' ? -0.55 : -1.0) - hiker.pitch) * Math.min(1, dt * 2.5);   // you look down at your hands
-  const c = gear.cur, k = kindOf(c), nm = gear.sel === 'bladder' ? 'bladder' : 'canteen', how = { pump: 'filter', boil: 'boil', iodine: 'add iodine to' }[gear.method];
+  const c = gear.cur, k = kindOf(c), nm = gear.name, how = { pump: 'filter', boil: 'boil', iodine: 'add iodine to' }[gear.method];
   if (gear.busy) waterHint = 'Hold still to keep going  ·  move to stop';
   else if (gear.sel === 'straw') waterHint = hintWater ? '[Y] drink through the LifeStraw' : '';
   else if (hintWater && c.water < c.cap - 0.02) waterHint = `[U] fill the ${nm}`;
-  else if (k === 'raw' && hiker.mode === 'walk') waterHint = `[U] ${how} the water${c.turb > 0.3 ? ' (it is silty)' : ''}  ·  [4] change method  ·  [Y] drink`;
+  else if (k === 'raw' && hiker.mode === 'walk') waterHint = `[U] ${how} the water${c.turb > 0.3 ? ' (it is silty)' : ''}  ·  [Y] drink`;
   else if (hydration.pct >= 0.9 && c.water > 0.02) waterHint = '[Y] drink';
   else waterHint = '';
 }
@@ -860,8 +865,7 @@ function hydrationStep(dt, live, p) {
 function act() {
   const p = hiker.pos;
   if (pressed.has('KeyY') && !state.ask && !atv.riding && !state.cut && hiker.mode !== 'climb') { const why = gear.drink(waterAhead()); if (why && why !== 'busy') hud.toast(why, 'warn'); }
-  for (const [code, k] of [['Digit1', 'canteen'], ['Digit2', 'bladder'], ['Digit3', 'straw']]) if (pressed.has(code) && !state.ask) { const m = gear.select(k); if (m) hud.toast(m); }
-  if (pressed.has('Digit4') && !state.ask) { const m = gear.cycleMethod(); if (m) hud.toast(m); }
+  if (!state.ask && !state.cut) for (let i = 0; i < 5; i++) if (pressed.has(`Digit${i + 1}`)) { if (props.carry) hud.toast('Put the stone down first.'); else { inventory.select(i); applySelection(); } }
   const fx = -Math.sin(hiker.yaw), fz = -Math.cos(hiker.yaw);
   // the quad, a stool, a fishing line, a marshmallow
   if (pressed.has('KeyU')) {
@@ -1501,7 +1505,7 @@ function raceGoal() {
 
 let togetherGoal = null;
 function toggleTogether(open = !togetherOpen) {
-  if (open && (!state.started || state.paused || map.open || state.travel)) return;
+  if (open && (!state.started || state.paused || map.open || state.travel || invOpen)) return;
   togetherOpen = open;
   $('together').classList.toggle('hidden', !open);
   document.body.classList.toggle('together-open', open);
@@ -1524,6 +1528,40 @@ for (const b of $('together').querySelectorAll('[data-stance]')) {
     else party.command(s);
     toggleTogether(false);
   };
+}
+
+// ------------------------------------------------------------------ the pack and the quick bar (src/inventory.js)
+const TOOL_HINT = { mind: 'Telekinesis · [Click] lift · [R] sink · [E] level · [Wheel] size', fireworks: 'Fireworks · [Click] set one down · [R] light · [I] style', axe: 'Axe · [Click] to swing', machete: 'Machete · [Click] to swing' };
+const invUI = new InventoryUI(inventory, {
+  select: (i) => { inventory.select(i); applySelection(); },
+  describe: (id) => {
+    const c = { canteen: gear.canteen, bladder: gear.bladder, pot: gear.pot }[id];
+    if (c) return containerLabel(ITEMS[id].name, c);
+    if (id === 'pump') return `Element ${Math.round(gear.filter.clog * 100)}% clogged.`;
+    if (id === 'iodine') return `${gear.tabs} tablets.`;
+    if (id === 'straw') return `${gear.straw.litres.toFixed(1)} L drunk through it.`;
+    return '';
+  },
+  badge: (id) => { const c = { canteen: gear.canteen, bladder: gear.bladder, pot: gear.pot }[id]; return c ? `${c.water.toFixed(1)}L` : ''; },
+  changed: () => { applySelection(false); save(); },
+});
+/** What the selected quick slot means: a tool in the hand, or a bottle, pot or treatment [U] and [Y] work with. */
+function applySelection(announce = true) {
+  const id = inventory.id, it = id && ITEMS[id];
+  let tool = 'fists', msg = 'Bare hands';
+  if (it?.kind === 'tool') { tool = id; msg = TOOL_HINT[id]; }
+  else if (it?.kind === 'water') msg = gear.select(id) || it.name;
+  else if (id === 'pump' || id === 'iodine') { gear.setMethod(id); msg = `${it.name} · [U] on the water in your ${gear.name}`; }
+  props.setTool(tool);
+  invUI.render();
+  if (announce) { hud.toast(msg); invUI.flash(it ? it.name : 'Bare hands'); }
+}
+function toggleInventory(open = !invOpen) {
+  if (open && (!state.started || state.paused || map.open || state.travel || togetherOpen || state.sleeping)) return;
+  invOpen = open;
+  invUI.setOpen(open);
+  if (open) { keys.clear(); if (document.pointerLockElement) document.exitPointerLock(); }
+  else lockPointer();
 }
 
 function raceEnded({ won, name }) {
@@ -1555,7 +1593,7 @@ if (sessionStorage.getItem('rawah-autostart')) { sessionStorage.removeItem('rawa
 function tick(dt, draw = true) {
   t += dt;
   let gameMin = 0;
-  const live = state.started && !state.paused && !state.sleeping && !state.rescue && !state.travel && !map.open && !togetherOpen;
+  const live = state.started && !state.paused && !state.sleeping && !state.rescue && !state.travel && !map.open && !togetherOpen && !invOpen;
   if (state.sleeping) {
     state.sleeping.t += dt;
     if (state.sleeping.t > 2.2) finishSleep();
@@ -1915,6 +1953,7 @@ function tick(dt, draw = true) {
       state.wxLabel = wxLabel;
     }
     hud.mode = input.mode;
+    if (frameNo % 15 === 0) { inventory.sync({ iodine: gear.tabs, firewood: wood.carried || 0 }); invUI.render(); }
     hud.update(hudState = {
       yaw: hiker.yaw, place, sub, elev: p.y, night: sky.sunDir.y < -0.03, coords: latLon(p),
       clock: `${calendar.dateLabel} · ${clock(state.hour)}`, tempC: env.tempC, wx: weather.label,
@@ -1979,7 +2018,7 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, hydration, gear, smokeCol, flare,
+    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, hydration, gear, inventory, invUI, smokeCol, flare,
     benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },

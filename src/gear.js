@@ -35,6 +35,7 @@ export { sumH, effective, kindOf, sourceHaz };
 
 export const CANTEEN_L = 0.95;
 export const BLADDER_L = 2.0;
+export const POT_L = 1.5;
 const PROP = 1.35;                        // props on the ground are drawn a third larger than life so they read from a few metres away
 const SIP_L = 0.18;                       // a few swallows
 const FILL_LS = 0.21;                     // litres a second dunking a narrow-necked canteen
@@ -235,14 +236,16 @@ export class Gear {
     this.groundCanteen = buildCanteen();
     this.groundCanteen.userData.lift = 0.11; this.groundCanteen.userData.mouthY = 0.12; this.groundCanteen.userData.tilt = 1.15;
     this.groundBag = buildBladder();
+    this.groundPot = buildPot();
+    this.groundPot.userData.lift = 0; this.groundPot.userData.mouthY = 0.13; this.groundPot.userData.tilt = 0.08;
     this.gm = this.groundCanteen;
     this.filterObj = buildFilter();
     this.cup = buildCup(this.m);
     this.strainer = strainer(this.m);
-    this.pot = buildPot();
+    this.potModel = buildPot();
     this.strawObj = buildStraw();
     this.steam = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false }));
-    this.station.add(this.groundCanteen, this.groundBag, this.filterObj, this.cup, this.strainer, this.pot, this.strawObj, this.steam);
+    this.station.add(this.groundCanteen, this.groundBag, this.groundPot, this.filterObj, this.cup, this.strainer, this.potModel, this.strawObj, this.steam);
     scene.add(this.station);
     this.events = [];
     this.lastSips = 0;
@@ -252,6 +255,8 @@ export class Gear {
   reset() {
     this.canteen = mk(CANTEEN_L, CANTEEN_L);
     this.bladder = mk(BLADDER_L, BLADDER_L);
+    this.pot = mk(POT_L, 0);
+    this.potObj = null;
     this.sel = 'canteen';
     this.method = 'pump';
     this.filter = { owned: true, clog: 0.05, litres: 0, scrubs: 0 };
@@ -262,22 +267,21 @@ export class Gear {
   }
 
   /** The container [U] and [Y] work on (the straw fills and treats the canteen). */
-  get cur() { return this.sel === 'bladder' ? this.bladder : this.canteen; }
-  get carried() { return this.canteen.water + this.bladder.water; }
+  get cur() { return this.sel === 'bladder' ? this.bladder : this.sel === 'pot' ? this.pot : this.canteen; }
+  get name() { return this.sel === 'bladder' ? 'bladder' : this.sel === 'pot' ? 'pot' : 'canteen'; }
+  get carried() { return this.canteen.water + this.bladder.water + this.pot.water; }
   get busy() { return !!this.act && this.act.kind !== 'drink'; }
   get drinking() { return this.act?.kind === 'drink'; }
 
   select(k) {
     if (this.act) return null;
     this.sel = k;
-    return k === 'straw' ? 'LifeStraw: face the water and press [Y] to drink from it.' : k === 'bladder' ? 'Bladder (2 L) selected.' : 'Canteen selected.';
+    if (k === 'pot') this.method = 'boil';
+    else if (this.method === 'boil') this.method = 'pump';
+    return k === 'straw' ? 'LifeStraw: face the water and press [Y] to drink from it.' : k === 'bladder' ? 'Bladder (2 L): [U] fill it at the water, [Y] drink.' : k === 'pot' ? 'Cooking pot: [U] fill it at the water, carry it to a lit fire and [U] again to boil.' : 'Canteen: [U] fill it at the water, [Y] drink.';
   }
 
-  cycleMethod() {
-    if (this.act) return null;
-    this.method = METHODS[(METHODS.indexOf(this.method) + 1) % METHODS.length];
-    return { pump: 'Treatment: pump filter.', boil: 'Treatment: boil on the fire.', iodine: `Treatment: iodine tablets (${this.tabs} left).` }[this.method];
-  }
+  setMethod(m) { if (!this.act) this.method = m; }
 
   /** Ground the grass should leave bare: the station while it is set out. */
   clearings() { return this.station.visible && this.act?.bx !== undefined ? [[this.act.bx, this.act.bz, 0.85]] : (this.station.visible && this.act?.target ? [[this.act.target.x, this.act.target.z, 0.6]] : []); }
@@ -293,12 +297,13 @@ export class Gear {
       c.haz = { g: r * SHARE.g, c: r * SHARE.c, b: r * SHARE.b, v: r * SHARE.v };
     }
   }
-  save() { return { c: this.#saveC(this.canteen), b: this.#saveC(this.bladder), sel: this.sel, m: this.method, tabs: this.tabs, f: { o: this.filter.owned, k: +this.filter.clog.toFixed(3), l: +this.filter.litres.toFixed(1), s: this.filter.scrubs }, s: { o: this.straw.owned, l: +this.straw.litres.toFixed(1) } }; }
+  save() { return { c: this.#saveC(this.canteen), b: this.#saveC(this.bladder), p: this.#saveC(this.pot), sel: this.sel, m: this.method, tabs: this.tabs, f: { o: this.filter.owned, k: +this.filter.clog.toFixed(3), l: +this.filter.litres.toFixed(1), s: this.filter.scrubs }, s: { o: this.straw.owned, l: +this.straw.litres.toFixed(1) } }; }
   load(s) {
     this.reset();
     if (!s) return;
     if (s.c) this.#loadC(this.canteen, s.c);
     if (s.b) this.#loadC(this.bladder, s.b);
+    if (s.p) this.#loadC(this.pot, s.p);
     if (s.sel) this.sel = s.sel;
     if (s.m) this.method = s.m;
     if (s.tabs != null) this.tabs = s.tabs;
@@ -330,7 +335,7 @@ export class Gear {
       return null;
     }
     const c = this.cur;
-    if (c.water <= 0.005) return `Your ${this.sel} is empty. Fill it at a stream or a lake.`;
+    if (c.water <= 0.005) return `Your ${this.name} is empty. Fill it at a stream or a lake.`;
     if (c.hot > 0) return 'It is still too hot to drink. Give it a few minutes.';
     this.act = { kind: 'drink', t: 0, dur: this.sel === 'bladder' ? 1.1 : 1.7, took: false, c };
     return null;
@@ -339,7 +344,7 @@ export class Gear {
   fill(target) {
     if (this.act) return 'busy';
     const c = this.cur;
-    if (c.water >= c.cap - 0.02) return `The ${this.sel === 'bladder' ? 'bladder' : 'canteen'} is full.`;
+    if (c.water >= c.cap - 0.02) return `The ${this.name} is full.`;
     this.act = { kind: 'fill', t: 0, target, c, noted: false, stir: 0 };
     return null;
   }
@@ -405,7 +410,7 @@ export class Gear {
 
   // ---- time: iodine works, boiled water cools (also called when you sleep)
   advance(min) {
-    for (const c of [this.canteen, this.bladder]) {
+    for (const c of [this.canteen, this.bladder, this.pot]) {
       if (c.hot > 0) c.hot = Math.max(0, c.hot - min);
       if (c.iod && c.iod.t < c.iod.req && c.water > 0.02) {
         c.iod.t += min;
@@ -449,10 +454,11 @@ export class Gear {
   #hide() { this.station.visible = false; this.ctx?.hiker && (this.ctx.hiker.emote = ''); this.pumped = 0; }
 
   #useModel(c) {
-    this.gm = c === this.bladder ? this.groundBag : this.groundCanteen;
+    this.gm = c === this.bladder ? this.groundBag : c === this.pot ? this.groundPot : this.groundCanteen;
     this.groundCanteen.visible = this.gm === this.groundCanteen;
     this.groundBag.visible = this.gm === this.groundBag;
-    this.pot.visible = false; this.strawObj.visible = false; this.steam.visible = false;
+    this.groundPot.visible = this.gm === this.groundPot;
+    this.potModel.visible = false; this.strawObj.visible = false; this.steam.visible = false;
   }
 
   /** Swallow from a container: infection chance from what the water carries now (and its silt). */
@@ -494,7 +500,7 @@ export class Gear {
     const T = a.target, u = a.t / a.dur;
     if (!a.set) {
       a.set = true; this.#useModel(this.canteen);
-      this.groundCanteen.visible = false; this.groundBag.visible = false;
+      this.groundCanteen.visible = false; this.groundBag.visible = false; this.groundPot.visible = false;
       this.emit({ type: 'sound', name: 'plop' });
     }
     ctx.hiker.emote = 'Crouch Idle 01';
@@ -566,7 +572,7 @@ export class Gear {
     }
     a.stir += dt;
     if (a.stir > 0.35) { a.stir = 0; this.emit({ type: 'stir', x: T.x, z: T.z, a: 0.01 }); this.emit({ type: 'ripple', x: T.x, z: T.z, amp: 0.35 }); }
-    const rate = (c === this.bladder ? 0.3 : FILL_LS) * dt;
+    const rate = (c === this.bladder ? 0.3 : c === this.pot ? 0.4 : FILL_LS) * dt;
     const add = Math.min(rate, c.cap - c.water);
     const turb = a.turb0 + 0.25 * Math.min(1, a.t / 3);                 // dunking stirs the bottom up a little
     const old = c.water, tot = old + add;
@@ -577,7 +583,7 @@ export class Gear {
     c.water = tot;
     c.from = T.kind;
     if (c.water >= c.cap - 0.005) {
-      this.emit({ type: 'toast', text: `${c === this.bladder ? 'Bladder' : 'Canteen'} full (${c.water.toFixed(2)} L). It is untreated${c.turb > 0.25 ? ' and silty' : ''}: treat it before you drink.` });
+      this.emit({ type: 'toast', text: `${c === this.bladder ? 'Bladder' : c === this.pot ? 'Pot' : 'Canteen'} full (${c.water.toFixed(2)} L). It is untreated${c.turb > 0.25 ? ' and silty' : ''}: treat it before you drink.` });
       this.emit({ type: 'sound', name: 'lid' });
       this.act = null; this.#hide();
     }
@@ -635,9 +641,13 @@ export class Gear {
       a.px = F.x + ux * 0.72; a.pz = F.z + uz * 0.72;
       a.bx = a.px - uz * 0.45; a.bz = a.pz + ux * 0.45;
       const y = (x, z) => this.#ground(x, z);
-      this.pot.scale.setScalar(PROP); this.pot.position.set(a.px, y(a.px, a.pz), a.pz); this.pot.rotation.set(0, 0, 0);
-      this.gm.scale.setScalar(PROP);
-      this.gm.position.set(a.bx, y(a.bx, a.bz) + this.gm.userData.lift * PROP, a.bz); this.gm.rotation.set(0, Math.atan2(-ux, -uz), 0);
+      const own = c === this.pot;
+      this.potObj = own ? this.groundPot : this.potModel;
+      this.potObj.scale.setScalar(PROP); this.potObj.position.set(a.px, y(a.px, a.pz), a.pz); this.potObj.rotation.set(0, 0, 0);
+      if (!own) {
+        this.gm.scale.setScalar(PROP);
+        this.gm.position.set(a.bx, y(a.bx, a.bz) + this.gm.userData.lift * PROP, a.bz); this.gm.rotation.set(0, Math.atan2(-ux, -uz), 0);
+      }
       this.steam.position.set(a.px, y(a.px, a.pz) + 0.3, a.pz);
       this.emit({ type: 'sound', name: 'pour' });
     }
@@ -645,17 +655,17 @@ export class Gear {
     this.#itemInHand(false);
     this.station.visible = true;
     this.filterObj.visible = false; this.cup.visible = false; this.strainer.visible = false;
-    this.pot.visible = true; this.steam.visible = true;
+    this.potObj.visible = true; this.steam.visible = true;
     const gm = ctx.gm || 0;
     if (!a.rolling) {
       a.heat += gm;
-      this.pot.userData.lid.rotation.z = 0;
+      this.potObj.userData.lid.rotation.z = 0;
       this.steam.material.opacity = 0.06 * smooth(0.5, 1, a.heat / a.heatNeed);
       if (a.heat >= a.heatNeed) { a.rolling = true; this.emit({ type: 'toast', text: `Rolling boil. Hold it there ${a.need} minute${a.need > 1 ? 's' : ''}${ctx.p.y > 2000 ? ' (3 at this altitude)' : ''}.` }); this.emit({ type: 'sound', name: 'creak' }); }
     } else {
       a.roll += gm;
-      this.pot.userData.lid.rotation.z = 0.04 * Math.sin(a.t * 22);
-      this.pot.userData.lid.position.y = 0.17 + 0.004 * Math.abs(Math.sin(a.t * 17));
+      this.potObj.userData.lid.rotation.z = 0.04 * Math.sin(a.t * 22);
+      this.potObj.userData.lid.position.y = 0.17 + 0.004 * Math.abs(Math.sin(a.t * 17));
       this.steam.material.opacity = 0.18 + 0.08 * Math.sin(a.t * 3);
       this.steam.scale.set(1 + 0.2 * Math.sin(a.t * 2.1), 1.6 + 0.3 * Math.sin(a.t * 3.3), 1);
       this.steam.position.y += Math.sin(a.t * 2) * 0.0015;
@@ -724,7 +734,7 @@ export class Gear {
     ctx.hiker.emote = 'Crouch Idle 01';
     this.station.visible = true;
     this.filterObj.visible = true; this.cup.visible = true; this.strainer.visible = false;
-    this.groundCanteen.visible = false; this.groundBag.visible = false;
+    this.groundCanteen.visible = false; this.groundBag.visible = false; this.groundPot.visible = false;
     this.filterObj.rotation.z = 0.05 * Math.sin(a.t * 18);
     this.filterObj.userData.handle.position.y = 0.2;
     f.clog = Math.max(0.12, f.clog - dt * (f.clog - 0.1) * 0.5);
