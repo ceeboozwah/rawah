@@ -18,12 +18,28 @@ import * as THREE from 'three';
 //
 // Keep your hands busy to be thirsty: moving cancels a fill or a pump (what was done stays done).
 
+//  BLADDER  a 2 L hydration bladder you scoop full at the water (about 0.3 L/s) and drink through its hose; [2] picks it, [1] the
+//           canteen, [3] the LifeStraw. Each carries its own water, its own hazard and its own treatment.
+//  STRAW    a LifeStraw: [3], then [Y] facing water kneels and drinks straight from it through a 0.2 micron hollow fibre.
+//  BOIL     [4] cycles the treatment ([U] does it): pump, boil, iodine. Boiling sets the container's water in a pot on the fire
+//           until it heats, then a rolling boil for 1 minute (3 above 2000 m, the CDC/WMS figure), then it has to cool.
+//  IODINE   a tablet in the container and a wait: about an hour in cold mountain water, longer if it is silty. It kills bacteria and
+//           most viruses in that time, Giardia only after about three times as long and Cryptosporidium hardly at all.
+//
+// Illness is a hazard per litre split into four kinds of bug (Giardia, Cryptosporidium, bacteria, viruses); each treatment keeps a
+// fraction of each. The per-litre figures are estimates from dose-response and typical cyst counts, not measurements: the evidence
+// for wilderness water is thin (Welch 2000), but the Appalachian Trail cohort found frequent untreated drinkers had about 8 times the odds of diarrhoea.
+
+import { NONE, SHARE, SURV, mulH, sumH, effective, kindOf, sourceHaz } from './water.js';
+export { sumH, effective, kindOf, sourceHaz };
+
 export const CANTEEN_L = 0.95;
+export const BLADDER_L = 2.0;
 const PROP = 1.35;                        // props on the ground are drawn a third larger than life so they read from a few metres away
 const SIP_L = 0.18;                       // a few swallows
 const FILL_LS = 0.21;                     // litres a second dunking a narrow-necked canteen
 const PUMP_LMIN = 1.0;                    // litres a minute through a clean ceramic element
-const RISK = { lake: 0.34, stream: 0.17, clean: 0.002 };   // chance of infection per litre drunk: raw lake, raw stream, filtered (viruses)
+const mk = (cap, water) => ({ cap, water, haz: { ...NONE }, turb: 0, treated: true, how: 'home', from: 'home', iod: null, hot: 0 });
 
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
@@ -152,7 +168,56 @@ function buildCup(m) {
   return g;
 }
 
+/** A 2 L hydration bladder lying flat: translucent blue bag, screw cap, slider bar, hose with a bite valve. Origin on the ground under it. */
+export function buildBladder() {
+  const m = mats(), g = new THREE.Group();
+  const bagMat = new THREE.MeshStandardMaterial({ color: 0x3f89b5, metalness: 0, roughness: 0.3, transparent: true, opacity: 0.78 });
+  const bag = new THREE.Mesh(new THREE.SphereGeometry(1, 28, 18), bagMat);
+  bag.scale.set(0.105, 0.03, 0.17); bag.position.y = 0.03; bag.castShadow = true; g.add(bag);
+  const weld = new THREE.Mesh(new THREE.TorusGeometry(1, 0.03, 6, 40), m.silicone);
+  weld.rotation.x = Math.PI / 2; weld.scale.set(0.105, 0.17, 1); weld.position.y = 0.03; g.add(weld);
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.022, 0.022, 20), m.plastic); cap.position.set(0, 0.05, -0.15); cap.castShadow = true; g.add(cap);
+  const slider = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.012, 0.02), m.plastic); slider.position.set(0, 0.05, 0.14); g.add(slider);
+  const tube = hose([new THREE.Vector3(0.05, 0.04, 0.14), new THREE.Vector3(0.14, 0.02, 0.2), new THREE.Vector3(0.2, 0.01, 0.12), new THREE.Vector3(0.22, 0.012, 0.04)], 0.006, m.plastic);
+  g.add(tube);
+  const valve = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.007, 0.03, 12), m.blue); valve.rotation.x = Math.PI / 2; valve.position.set(0.22, 0.014, 0.0); g.add(valve);
+  const root = new THREE.Group(); root.add(g);
+  root.userData.lift = 0; root.userData.mouthY = 0.07; root.userData.tilt = 0.12;
+  return root;
+}
+
+/** A small steel cooking pot with a lid and a bail handle, standing on y = 0. */
+export function buildPot() {
+  const m = mats(), g = new THREE.Group();
+  const wall = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.082, 0.13, 28, 1, true), m.steel); wall.material = wall.material.clone(); wall.material.side = THREE.DoubleSide; wall.position.y = 0.065; wall.castShadow = true; g.add(wall);
+  const soot = new THREE.Mesh(new THREE.CylinderGeometry(0.082, 0.082, 0.05, 28, 1, true), new THREE.MeshStandardMaterial({ color: 0x1a1816, roughness: 1, side: THREE.DoubleSide })); soot.scale.set(1.005, 1, 1.005); soot.position.y = 0.025; g.add(soot);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.082, 0.082, 0.004, 24), m.dark); base.position.y = 0.002; g.add(base);
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.003, 8, 28), m.dark); rim.rotation.x = Math.PI / 2; rim.position.y = 0.13; g.add(rim);
+  const water = new THREE.Mesh(new THREE.CylinderGeometry(0.081, 0.081, 0.002, 24), m.water); water.position.y = 0.1; g.add(water);
+  const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.087, 0.087, 0.006, 28), m.steel); lid.position.y = 0.17; lid.castShadow = true; g.add(lid);
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.012, 10, 8), m.plastic); knob.position.y = 0.184; lid.add(knob); knob.position.set(0, 0.014, 0);
+  const bail = new THREE.Mesh(new THREE.TorusGeometry(0.087, 0.0028, 6, 24, Math.PI), m.dark); bail.position.y = 0.12; g.add(bail);
+  g.userData.lid = lid; g.userData.water = water;
+  return g;
+}
+
+/** A LifeStraw: a pale tube with a blue band and a mouthpiece cap, 0.22 m long, lying along +x with its centre at the origin. */
+export function buildStraw() {
+  const m = mats(), g = new THREE.Group();
+  const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.0125, 0.0125, 0.22, 14), new THREE.MeshStandardMaterial({ color: 0xdfe7ea, roughness: 0.45 })); tube.rotation.z = Math.PI / 2; g.add(tube);
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.0132, 0.0132, 0.05, 14), m.blue); band.rotation.z = Math.PI / 2; band.position.x = -0.04; g.add(band);
+  const mouth = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.0125, 0.03, 14), m.blue); mouth.rotation.z = Math.PI / 2; mouth.position.x = 0.125; g.add(mouth);
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.012, 14), m.mesh); cap.rotation.z = Math.PI / 2; cap.position.x = -0.116; g.add(cap);
+  g.traverse((o) => { o.castShadow = true; });
+  return g;
+}
+
 // ------------------------------------------------------------------ what you carry and do
+
+const ROLL_MIN = (elev) => (elev > 2000 ? 3 : 1);                         // minutes at a rolling boil (CDC / WMS: 3 above 2000 m)
+const HEAT_MIN_PER_L = 4.5;                                               // a wood fire under a pot: about 1.4 kW into the water
+const COOL_MIN = 10;                                                      // minutes before boiled water can be drunk
+const METHODS = ['pump', 'boil', 'iodine'];
 
 export class Gear {
   constructor({ scene, camera, avatar, world }) {
@@ -164,40 +229,81 @@ export class Gear {
     this.heldFp = buildCanteen();
     this.heldFp.visible = false;
     camera.add(this.heldFp);
-    // the station: what you set on the ground to fill and filter
+    // the station: what you set on the ground to fill, filter and boil
     this.station = new THREE.Group();
     this.station.visible = false;
     this.groundCanteen = buildCanteen();
+    this.groundCanteen.userData.lift = 0.11; this.groundCanteen.userData.mouthY = 0.12; this.groundCanteen.userData.tilt = 1.15;
+    this.groundBag = buildBladder();
+    this.gm = this.groundCanteen;
     this.filterObj = buildFilter();
     this.cup = buildCup(this.m);
     this.strainer = strainer(this.m);
-    this.station.add(this.groundCanteen, this.filterObj, this.cup, this.strainer);
+    this.pot = buildPot();
+    this.strawObj = buildStraw();
+    this.steam = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false }));
+    this.station.add(this.groundCanteen, this.groundBag, this.filterObj, this.cup, this.strainer, this.pot, this.strawObj, this.steam);
     scene.add(this.station);
-    this.act = null;
     this.events = [];
     this.lastSips = 0;
     this.pumped = 0;
   }
 
   reset() {
-    this.canteen = { water: CANTEEN_L, clean: true, turb: 0, risk: RISK.clean, from: 'home' };
+    this.canteen = mk(CANTEEN_L, CANTEEN_L);
+    this.bladder = mk(BLADDER_L, BLADDER_L);
+    this.sel = 'canteen';
+    this.method = 'pump';
     this.filter = { owned: true, clog: 0.05, litres: 0, scrubs: 0 };
+    this.straw = { owned: true, litres: 0 };
+    this.tabs = 20;
     this.act = null;
     this.warnedRaw = false;
+  }
+
+  /** The container [U] and [Y] work on (the straw fills and treats the canteen). */
+  get cur() { return this.sel === 'bladder' ? this.bladder : this.canteen; }
+  get carried() { return this.canteen.water + this.bladder.water; }
+  get busy() { return !!this.act && this.act.kind !== 'drink'; }
+  get drinking() { return this.act?.kind === 'drink'; }
+
+  select(k) {
+    if (this.act) return null;
+    this.sel = k;
+    return k === 'straw' ? 'LifeStraw: face the water and press [Y] to drink from it.' : k === 'bladder' ? 'Bladder (2 L) selected.' : 'Canteen selected.';
+  }
+
+  cycleMethod() {
+    if (this.act) return null;
+    this.method = METHODS[(METHODS.indexOf(this.method) + 1) % METHODS.length];
+    return { pump: 'Treatment: pump filter.', boil: 'Treatment: boil on the fire.', iodine: `Treatment: iodine tablets (${this.tabs} left).` }[this.method];
   }
 
   /** Ground the grass should leave bare: the station while it is set out. */
   clearings() { return this.station.visible && this.act?.bx !== undefined ? [[this.act.bx, this.act.bz, 0.85]] : (this.station.visible && this.act?.target ? [[this.act.target.x, this.act.target.z, 0.6]] : []); }
 
-  get busy() { return !!this.act && this.act.kind !== 'drink'; }
-  get drinking() { return this.act?.kind === 'drink'; }
-
-  save() { return { c: { w: +this.canteen.water.toFixed(3), cl: this.canteen.clean, t: +this.canteen.turb.toFixed(2), r: this.canteen.risk, f: this.canteen.from }, f: { o: this.filter.owned, k: +this.filter.clog.toFixed(3), l: +this.filter.litres.toFixed(1), s: this.filter.scrubs } }; }
+  #saveC(c) { const h = (v) => +v.toFixed(5); return { w: +c.water.toFixed(3), h: [h(c.haz.g), h(c.haz.c), h(c.haz.b), h(c.haz.v)], t: +c.turb.toFixed(2), tr: c.treated, hw: c.how, f: c.from, i: c.iod ? { t: Math.round(c.iod.t), r: Math.round(c.iod.req) } : null, hot: Math.round(c.hot) }; }
+  #loadC(c, s) {
+    c.water = Math.min(c.cap, s.w ?? c.water);
+    c.turb = s.t || 0; c.from = s.f || 'home';
+    if (s.h) { c.haz = { g: s.h[0], c: s.h[1], b: s.h[2], v: s.h[3] }; c.treated = s.tr !== false; c.how = s.hw || ''; c.iod = s.i ? { t: s.i.t, req: s.i.r } : null; c.hot = s.hot || 0; }
+    else {                                                           // the first saves: clean flag and a single risk number
+      c.treated = !!s.cl; c.how = s.cl ? 'filtered' : '';
+      const r = s.cl ? 0.002 : Math.min(0.2, (s.r || 0.1) * 0.25);
+      c.haz = { g: r * SHARE.g, c: r * SHARE.c, b: r * SHARE.b, v: r * SHARE.v };
+    }
+  }
+  save() { return { c: this.#saveC(this.canteen), b: this.#saveC(this.bladder), sel: this.sel, m: this.method, tabs: this.tabs, f: { o: this.filter.owned, k: +this.filter.clog.toFixed(3), l: +this.filter.litres.toFixed(1), s: this.filter.scrubs }, s: { o: this.straw.owned, l: +this.straw.litres.toFixed(1) } }; }
   load(s) {
     this.reset();
     if (!s) return;
-    if (s.c) this.canteen = { water: s.c.w, clean: s.c.cl, turb: s.c.t || 0, risk: s.c.r ?? RISK.clean, from: s.c.f || 'home' };
+    if (s.c) this.#loadC(this.canteen, s.c);
+    if (s.b) this.#loadC(this.bladder, s.b);
+    if (s.sel) this.sel = s.sel;
+    if (s.m) this.method = s.m;
+    if (s.tabs != null) this.tabs = s.tabs;
     if (s.f) this.filter = { owned: s.f.o !== false, clog: s.f.k ?? 0.05, litres: s.f.l || 0, scrubs: s.f.s || 0 };
+    if (s.s) this.straw = { owned: s.s.o !== false, litres: s.s.l || 0 };
   }
 
   /** Water within reach ahead of (or under) the player: { x, z, kind: 'lake' | 'stream', level }, or null. */
@@ -214,26 +320,66 @@ export class Gear {
   }
 
   // ---- actions (each returns a reason string if it cannot start)
-  drink() {
-    if (this.act) return this.act.kind === 'drink' ? 'busy' : 'busy';
-    if (this.canteen.water <= 0.005) return 'Your canteen is empty. Fill it at a stream or a lake.';
-    this.act = { kind: 'drink', t: 0, dur: 1.7, took: false };
+  /** [Y]: swallows from the selected container, or from the water itself through the LifeStraw (target = water ahead). */
+  drink(target) {
+    if (this.act) return 'busy';
+    if (this.sel === 'straw') {
+      if (!this.straw.owned) return 'You have no LifeStraw.';
+      if (!target) return 'Face a stream or a lake to drink through the LifeStraw.';
+      this.act = { kind: 'straw', t: 0, dur: 2.4, took: false, target };
+      return null;
+    }
+    const c = this.cur;
+    if (c.water <= 0.005) return `Your ${this.sel} is empty. Fill it at a stream or a lake.`;
+    if (c.hot > 0) return 'It is still too hot to drink. Give it a few minutes.';
+    this.act = { kind: 'drink', t: 0, dur: this.sel === 'bladder' ? 1.1 : 1.7, took: false, c };
     return null;
   }
 
   fill(target) {
     if (this.act) return 'busy';
-    if (this.canteen.water >= CANTEEN_L - 0.02) return 'The canteen is full.';
-    this.act = { kind: 'fill', t: 0, target, from: this.canteen.water, noted: false, stir: 0 };
+    const c = this.cur;
+    if (c.water >= c.cap - 0.02) return `The ${this.sel === 'bladder' ? 'bladder' : 'canteen'} is full.`;
+    this.act = { kind: 'fill', t: 0, target, c, noted: false, stir: 0 };
     return null;
   }
 
-  pump() {
+  /** [U] away from the water: whichever treatment is selected. fire = the lit campfire { x, z } near you, or null. */
+  treat() {
+    const c = this.cur, k = kindOf(c);
     if (this.act) return 'busy';
+    if (k === 'empty') return 'Nothing to treat.';
+    if (k === 'waiting') return `The iodine is still working (${Math.round(c.iod.t)} of ${c.iod.req} min).`;
+    if (k === 'treated') return 'That water is already treated.';
+    if (this.method === 'boil') return this.#boil(c);
+    if (this.method === 'iodine') return this.#iodine(c);
+    return this.#pump(c);
+  }
+
+  #pump(c) {
     if (!this.filter.owned) return 'You have no filter.';
-    if (this.canteen.clean || this.canteen.water < 0.02) return 'Nothing to filter.';
     if (this.filter.clog > 0.97) return 'The filter is clogged solid. Scrub the element first.';
-    this.act = { kind: 'pump', t: 0, done: 0, batch: 0, pour: 0, phase: 0 };
+    this.act = { kind: 'pump', t: 0, done: 0, batch: 0, pour: 0, phase: 0, c };
+    return null;
+  }
+
+  #boil(c) {
+    const f = this.ctx?.fire;
+    if (!f) return 'Boiling needs a fire. Light one with [F].';
+    if (Math.hypot(f.x - this.ctx.p.x, f.z - this.ctx.p.z) > 4.5) return 'Stand closer to the fire.';
+    this.act = { kind: 'boil', t: 0, heat: 0, roll: 0, need: ROLL_MIN(this.ctx.p.y), heatNeed: Math.max(1.5, c.water * HEAT_MIN_PER_L), c, set: false, rolling: false };
+    return null;
+  }
+
+  #iodine(c) {
+    const waterC = this.ctx?.waterC ?? 10, cloudy = c.turb > 0.3;
+    const n = Math.ceil(c.water - 0.001) * (cloudy || waterC < 8 ? 2 : 1);
+    if (this.tabs < n) return `You need ${n} iodine tablets for this water; you have ${this.tabs}.`;
+    this.tabs -= n;
+    const req = Math.round(Math.min(240, Math.max(30, 30 * 2 ** ((20 - waterC) / 10) * (1 + 2 * c.turb))));
+    c.iod = { t: 0, req }; c.treated = true; c.how = 'iodine';
+    this.emit({ type: 'sound', name: 'plop' });
+    this.emit({ type: 'toast', text: `${n} tablet${n > 1 ? 's' : ''} in. Wait about ${req} minutes${cloudy ? ' (the water is cloudy)' : waterC < 10 ? ' (it is cold)' : ''}. You can walk on.` });
     return null;
   }
 
@@ -248,26 +394,48 @@ export class Gear {
     if (!this.act || this.act.kind === 'drink') return;
     const a = this.act;
     if (a.kind === 'pump' && this.pumped > 0) this.#finishPump(a);
+    if (a.kind === 'boil' && a.roll > 0) {
+      const k = Math.min(1, a.roll / a.need), f = 10 ** (-6 * k), c = a.c;
+      c.haz = mulH(c.haz, { g: f, c: f, b: f, v: f });
+      this.emit({ type: 'toast', text: 'You took it off the fire early. The boil was cut short.', warn: true });
+    }
     this.act = null;
     this.#hide();
   }
 
+  // ---- time: iodine works, boiled water cools (also called when you sleep)
+  advance(min) {
+    for (const c of [this.canteen, this.bladder]) {
+      if (c.hot > 0) c.hot = Math.max(0, c.hot - min);
+      if (c.iod && c.iod.t < c.iod.req && c.water > 0.02) {
+        c.iod.t += min;
+        if (c.iod.t >= c.iod.req) {
+          c.iod.t = c.iod.req;
+          this.emit({ type: 'toast', text: `The iodine has had its time. Bacteria and viruses are gone; Giardia needs about ${c.iod.req * 3} minutes and Cryptosporidium survives.` });
+        }
+      }
+    }
+  }
+
   // ---- frame
   /**
-   * ctx: { p (feet), yaw, first, hiker, hydration, turbAt(x,z), lakeAt, groundY(x,z) }.
+   * ctx: { p (feet), yaw, first, hiker, hydration, turbAt(x,z), groundY(x,z), dry, fire: {x,z} | null, waterC, gm (game minutes this frame) }.
    * Returns the events to act on: { type: 'toast'|'sound'|'ripple'|'stir'|'emote', ... }.
    */
   update(dt, ctx) {
     this.events.length = 0;
     const a = this.act;
     this.ctx = ctx;
-    // the first-person canteen is only there while drinking
-    this.heldFp.visible = !!a && a.kind === 'drink' && ctx.first;
+    if (ctx.gm > 0) this.advance(ctx.gm);
+    // the first-person canteen is only there while drinking from it
+    this.heldFp.visible = !!a && a.kind === 'drink' && ctx.first && a.c === this.canteen;
     if (!a) { ctx.hiker.emote = ctx.hiker.emote === 'Crouch Idle 01' || ctx.hiker.emote === 'Wiping Sweat' ? '' : ctx.hiker.emote; this.#itemInHand(false); return this.events; }
     a.t += dt;
     if (a.kind === 'drink') this.#drink(dt, a, ctx);
+    else if (a.kind === 'straw') this.#straw(dt, a, ctx);
     else if (a.kind === 'fill') this.#fill(dt, a, ctx);
-    else if (a.kind === 'pump') this.#pump(dt, a, ctx);
+    else if (a.kind === 'pump') this.#pumpStep(dt, a, ctx);
+    else if (a.kind === 'boil') this.#boilStep(dt, a, ctx);
     else if (a.kind === 'scrub') this.#scrub(dt, a, ctx);
     return this.events;
   }
@@ -280,10 +448,33 @@ export class Gear {
 
   #hide() { this.station.visible = false; this.ctx?.hiker && (this.ctx.hiker.emote = ''); this.pumped = 0; }
 
-  // the swallows: lift, tip, a gulp, lower
+  #useModel(c) {
+    this.gm = c === this.bladder ? this.groundBag : this.groundCanteen;
+    this.groundCanteen.visible = this.gm === this.groundCanteen;
+    this.groundBag.visible = this.gm === this.groundBag;
+    this.pot.visible = false; this.strawObj.visible = false; this.steam.visible = false;
+  }
+
+  /** Swallow from a container: infection chance from what the water carries now (and its silt). */
+  #swallow(c, ctx, want) {
+    const went = ctx.hydration.drink(want);
+    c.water = Math.max(0, c.water - went);
+    this.emit({ type: 'sound', name: 'gulp' });
+    if (went < want - 0.01) this.emit({ type: 'toast', text: 'Your stomach is full. Give it a few minutes.' });
+    else if (went > 0) {
+      const k = kindOf(c);
+      if (k === 'raw' || k === 'waiting') {
+        if (k === 'raw' && !this.warnedRaw) { this.warnedRaw = true; this.emit({ type: 'toast', text: 'That water is untreated. Treat it first next time.', warn: true }); }
+        if (ctx.hydration.swallowRaw(went, sumH(effective(c)) * (1 + 2 * c.turb))) this.emit({ type: 'sick' });
+      } else if (ctx.hydration.swallowRaw(went, sumH(effective(c)) * (1 + 2 * c.turb))) this.emit({ type: 'sick' });
+    }
+    this.lastSips++;
+  }
+
+  // the swallows: lift, tip, a gulp, lower (the bladder: a bite on the valve, no stopping)
   #drink(dt, a, ctx) {
-    const u = a.t / a.dur;
-    if (ctx.first) {
+    const u = a.t / a.dur, c = a.c, held = c === this.canteen;
+    if (held && ctx.first) {
       const lift = smooth(0, 0.3, u) * (1 - smooth(0.8, 1, u)), tip = smooth(0.22, 0.52, u) * (1 - smooth(0.62, 0.82, u));
       const h = this.heldFp;
       h.position.set(THREE.MathUtils.lerp(0.2, 0.03, lift), THREE.MathUtils.lerp(-0.34, -0.16 + 0.015 * Math.sin(a.t * 14) * tip, lift), THREE.MathUtils.lerp(-0.56, -0.5, lift));
@@ -291,25 +482,45 @@ export class Gear {
       h.scale.setScalar(1.05);
       this.#itemInHand(false);
     } else {
-      this.#itemInHand(true);
+      this.#itemInHand(held);
       ctx.hiker.emote = 'Wiping Sweat';
     }
-    if (!a.took && u > 0.5) {
-      a.took = true;
-      const c = this.canteen;
-      const want = Math.min(SIP_L, c.water);
-      const went = ctx.hydration.drink(want);
-      c.water = Math.max(0, c.water - went);
-      this.emit({ type: 'sound', name: 'gulp' });
-      if (went < want - 0.01) this.emit({ type: 'toast', text: 'Your stomach is full. Give it a few minutes.' });
-      else if (!c.clean && went > 0) {
-        // raw water: it might carry something
-        if (!this.warnedRaw) { this.warnedRaw = true; this.emit({ type: 'toast', text: 'That water is untreated. Filter it first next time.', warn: true }); }
-        if (ctx.hydration.swallowRaw(went, c.risk * (1 + 2 * c.turb))) this.emit({ type: 'sick' });
-      }
-      this.lastSips++;
-    }
+    if (!a.took && u > 0.5) { a.took = true; this.#swallow(c, ctx, Math.min(held ? SIP_L : 0.22, c.water)); }
     if (a.t >= a.dur) { this.act = null; this.heldFp.visible = false; this.#itemInHand(false); ctx.hiker.emote = ''; }
+  }
+
+  // kneel and drink from the water through the LifeStraw
+  #straw(dt, a, ctx) {
+    const T = a.target, u = a.t / a.dur;
+    if (!a.set) {
+      a.set = true; this.#useModel(this.canteen);
+      this.groundCanteen.visible = false; this.groundBag.visible = false;
+      this.emit({ type: 'sound', name: 'plop' });
+    }
+    ctx.hiker.emote = 'Crouch Idle 01';
+    this.#itemInHand(false);
+    this.station.visible = true;
+    this.filterObj.visible = false; this.cup.visible = false; this.strainer.visible = false;
+    this.strawObj.visible = true;
+    const yaw = Math.atan2(-Math.sin(ctx.yaw), -Math.cos(ctx.yaw));
+    this.strawObj.scale.setScalar(PROP);
+    this.strawObj.position.set(T.x, T.level + 0.04, T.z);
+    this.strawObj.rotation.set(0, yaw - Math.PI / 2, -0.25);
+    if (!a.took && u > 0.55) {
+      a.took = true;
+      const went = ctx.hydration.drink(0.28);
+      if (went < 0.27) this.emit({ type: 'toast', text: 'Your stomach is full. Give it a few minutes.' });
+      else {
+        this.straw.litres += went;
+        const turb = ctx.turbAt(T.x, T.z);
+        const h = mulH(sourceHaz(T.kind, T.x, T.z), SURV.straw);
+        if (ctx.hydration.swallowRaw(went, sumH(h) * (1 + 2 * turb))) this.emit({ type: 'sick' });
+        if (!this.warnedStraw) { this.warnedStraw = true; this.emit({ type: 'toast', text: 'The LifeStraw takes out bacteria and protozoa, but not viruses.' }); }
+      }
+      this.emit({ type: 'sound', name: 'gulp' });
+      this.emit({ type: 'ripple', x: T.x, z: T.z, amp: 0.2 });
+    }
+    if (a.t >= a.dur) { this.act = null; this.#hide(); }
   }
 
   #setStation(ctx, a) {
@@ -328,51 +539,57 @@ export class Gear {
 
   #ground(x, z) { return this.ctx.groundY(x, z); }
 
-  // dunk the canteen at the water's edge
+  // dunk the container at the water's edge (the bladder is scooped with its wide mouth)
   #fill(dt, a, ctx) {
-    if (!a.set) { this.#setStation(ctx, a); a.set = true; this.emit({ type: 'sound', name: 'plop' }); }
-    const T = a.target, c = this.canteen;
+    const c = a.c;
+    if (!a.set) { this.#setStation(ctx, a); a.set = true; this.#useModel(c); this.emit({ type: 'sound', name: 'plop' }); }
+    const T = a.target;
     ctx.hiker.emote = 'Crouch Idle 01';
     this.#itemInHand(false);
     this.filterObj.visible = false; this.cup.visible = false; this.strainer.visible = false;
     this.station.visible = true;
-    // the canteen lies tilted in the water, neck up and out
-    const g = this.groundCanteen;
+    // it lies tilted in the water, neck up and out
+    const g = this.gm;
     g.scale.setScalar(PROP);
     g.position.set(T.x, T.level - 0.035, T.z);
-    g.rotation.set(0, Math.atan2(a.fx, a.fz), 1.15 + 0.08 * Math.sin(a.t * 3));
+    g.rotation.set(0, Math.atan2(a.fx, a.fz), g.userData.tilt + 0.08 * Math.sin(a.t * 3));
     // it fills; the water's turbidity at the spot (and what we stir up) is what goes in
     if (!a.noted) {
       a.noted = true;
       a.turb0 = ctx.turbAt(T.x, T.z);
-      if (c.clean && c.water > 0.02) this.emit({ type: 'toast', text: 'Topping up a clean canteen from the stream makes all of it untreated.', warn: true });
-      a.srcRisk = T.kind === 'lake' ? RISK.lake : RISK.stream;
-      a.rawBefore = !c.clean && c.water > 0.02;
-      c.clean = false;
+      a.src = sourceHaz(T.kind, T.x, T.z);
+      if (c.water > 0.02 && kindOf(c) !== 'raw') this.emit({ type: 'toast', text: `Topping up treated water with untreated water makes all of it untreated${c.iod ? ' (the iodine has to start over)' : ''}.`, warn: true });
+      c.haz = { ...effective(c) };                                           // what is in there is what counts from here
+      c.iod = null; c.hot = 0;
+      if (c.water < 0.02) c.haz = { ...NONE };
+      c.treated = false; c.how = '';
     }
     a.stir += dt;
     if (a.stir > 0.35) { a.stir = 0; this.emit({ type: 'stir', x: T.x, z: T.z, a: 0.01 }); this.emit({ type: 'ripple', x: T.x, z: T.z, amp: 0.35 }); }
-    const rate = FILL_LS * dt;
-    const add = Math.min(rate, CANTEEN_L - c.water);
+    const rate = (c === this.bladder ? 0.3 : FILL_LS) * dt;
+    const add = Math.min(rate, c.cap - c.water);
     const turb = a.turb0 + 0.25 * Math.min(1, a.t / 3);                 // dunking stirs the bottom up a little
-    const old = c.water;
-    c.turb = old + add > 0 ? (c.turb * old + turb * add) / (old + add) : turb;
-    c.risk = a.rawBefore ? Math.max(c.risk, a.srcRisk) : a.srcRisk;
-    c.water += add;
+    const old = c.water, tot = old + add;
+    if (tot > 0) {
+      c.turb = (c.turb * old + turb * add) / tot;
+      for (const k of ['g', 'c', 'b', 'v']) c.haz[k] = (c.haz[k] * old + a.src[k] * add) / tot;
+    }
+    c.water = tot;
     c.from = T.kind;
-    if (c.water >= CANTEEN_L - 0.005) {
-      this.emit({ type: 'toast', text: `Canteen full (${c.water.toFixed(2)} L). It is untreated${c.turb > 0.25 ? ' and silty' : ''}: filter it before you drink.` });
+    if (c.water >= c.cap - 0.005) {
+      this.emit({ type: 'toast', text: `${c === this.bladder ? 'Bladder' : 'Canteen'} full (${c.water.toFixed(2)} L). It is untreated${c.turb > 0.25 ? ' and silty' : ''}: treat it before you drink.` });
       this.emit({ type: 'sound', name: 'lid' });
       this.act = null; this.#hide();
     }
   }
 
-  // set the canteen down, run the intake hose into it, pump through the ceramic into the clean cup, pour it back
-  #pump(dt, a, ctx) {
-    const c = this.canteen, f = this.filter;
+  // set the container down, run the intake hose into it, pump through the ceramic into the clean cup, pour it back
+  #pumpStep(dt, a, ctx) {
+    const c = a.c, f = this.filter;
     if (!a.set) {
       this.#setStation(ctx, a);
       a.set = true; this.pumped = 0; a.batch = 0; a.pour = 0;
+      this.#useModel(c);
       this.#layoutStation(a, ctx);
       this.emit({ type: 'sound', name: 'lid' });
     }
@@ -383,7 +600,7 @@ export class Gear {
     // flow slows as the element clogs; silty water clogs it faster
     const flow = PUMP_LMIN / 60 * Math.max(0.12, 1 - 0.88 * f.clog) * (1 - 0.35 * c.turb);
     const left = c.water - this.pumped;
-    // the pour: the cup tips into the canteen, then pumping starts again
+    // the pour: the cup tips into the container, then pumping starts again
     if (a.pour > 0) {
       a.pour -= dt;
       const k = 1 - Math.max(0, a.pour) / 0.8;
@@ -406,43 +623,95 @@ export class Gear {
     if (f.clog > 0.97) { this.emit({ type: 'toast', text: 'The element is clogged. Scrub it with [U] when you stop pumping.', warn: true }); this.#finishPump(a); }
   }
 
+  // a pot at the fire's edge, the container beside it: heat it, then hold a rolling boil
+  #boilStep(dt, a, ctx) {
+    const c = a.c, F = ctx.fire;
+    if (!F) { this.cancel(); return; }
+    if (!a.set) {
+      a.set = true;
+      this.#setStation(ctx, a);
+      this.#useModel(c);
+      const dx = ctx.p.x - F.x, dz = ctx.p.z - F.z, d = Math.hypot(dx, dz) || 1, ux = dx / d, uz = dz / d;
+      a.px = F.x + ux * 0.72; a.pz = F.z + uz * 0.72;
+      a.bx = a.px - uz * 0.45; a.bz = a.pz + ux * 0.45;
+      const y = (x, z) => this.#ground(x, z);
+      this.pot.scale.setScalar(PROP); this.pot.position.set(a.px, y(a.px, a.pz), a.pz); this.pot.rotation.set(0, 0, 0);
+      this.gm.scale.setScalar(PROP);
+      this.gm.position.set(a.bx, y(a.bx, a.bz) + this.gm.userData.lift * PROP, a.bz); this.gm.rotation.set(0, Math.atan2(-ux, -uz), 0);
+      this.steam.position.set(a.px, y(a.px, a.pz) + 0.3, a.pz);
+      this.emit({ type: 'sound', name: 'pour' });
+    }
+    ctx.hiker.emote = 'Crouch Idle 01';
+    this.#itemInHand(false);
+    this.station.visible = true;
+    this.filterObj.visible = false; this.cup.visible = false; this.strainer.visible = false;
+    this.pot.visible = true; this.steam.visible = true;
+    const gm = ctx.gm || 0;
+    if (!a.rolling) {
+      a.heat += gm;
+      this.pot.userData.lid.rotation.z = 0;
+      this.steam.material.opacity = 0.06 * smooth(0.5, 1, a.heat / a.heatNeed);
+      if (a.heat >= a.heatNeed) { a.rolling = true; this.emit({ type: 'toast', text: `Rolling boil. Hold it there ${a.need} minute${a.need > 1 ? 's' : ''}${ctx.p.y > 2000 ? ' (3 at this altitude)' : ''}.` }); this.emit({ type: 'sound', name: 'creak' }); }
+    } else {
+      a.roll += gm;
+      this.pot.userData.lid.rotation.z = 0.04 * Math.sin(a.t * 22);
+      this.pot.userData.lid.position.y = 0.17 + 0.004 * Math.abs(Math.sin(a.t * 17));
+      this.steam.material.opacity = 0.18 + 0.08 * Math.sin(a.t * 3);
+      this.steam.scale.set(1 + 0.2 * Math.sin(a.t * 2.1), 1.6 + 0.3 * Math.sin(a.t * 3.3), 1);
+      this.steam.position.y += Math.sin(a.t * 2) * 0.0015;
+      if (a.roll >= a.need) {
+        c.haz = mulH(c.haz, SURV.boil); c.iod = null; c.treated = true; c.how = 'boiled'; c.hot = COOL_MIN;
+        this.emit({ type: 'toast', text: `Boiled ${a.need} min. Safe, but hot: give it ${COOL_MIN} minutes to cool.` });
+        this.emit({ type: 'sound', name: 'ready' });
+        this.act = null; this.#hide();
+      }
+    }
+  }
+
   #layoutStation(a, ctx) {
     const { bx, bz, rx, rz, fx, fz } = a;
     const y = (x, z) => this.#ground(x, z);
+    const gm = this.gm;
     const place = (obj, x, z, yaw = 0) => { obj.position.set(x, y(x, z), z); obj.rotation.set(0, yaw, 0); };
-    for (const o of [this.groundCanteen, this.filterObj, this.cup]) o.scale.setScalar(PROP);
+    for (const o of [gm, this.filterObj, this.cup]) o.scale.setScalar(PROP);
     const cx = bx - rx * 0.2, cz = bz - rz * 0.2;
-    place(this.groundCanteen, cx, cz, Math.atan2(fx, fz));
-    this.groundCanteen.position.y += 0.11 * PROP;
-    this.groundCanteen.rotation.z = 0;
+    place(gm, cx, cz, Math.atan2(fx, fz));
+    gm.position.y += gm.userData.lift * PROP;
+    gm.rotation.z = 0;
     place(this.filterObj, bx + rx * 0.06, bz + rz * 0.06, Math.atan2(rx, rz) + Math.PI / 2);
     place(this.cup, bx + rx * 0.3, bz + rz * 0.3, 0);
     a.cupPos = this.cup.position.clone();
-    a.mouth = new THREE.Vector3(cx, this.groundCanteen.position.y + 0.12 * PROP, cz);
-    // hoses: intake from the filter's side port into the canteen's mouth; output from the other port into the cup
+    const my = gm.userData.mouthY;
+    a.mouth = new THREE.Vector3(cx, gm.position.y + my * PROP, cz);
+    // hoses: intake from the filter's side port into the container's mouth; output from the other port into the cup
     const hoses = this.filterObj.userData.hoses;
     while (hoses.children.length) { const o = hoses.children[0]; hoses.remove(o); o.geometry?.dispose(); }
     this.filterObj.updateMatrixWorld(true);
     const inv = new THREE.Matrix4().copy(this.filterObj.matrixWorld).invert();
     const L = (v) => v.clone().applyMatrix4(inv);
     const ip = this.filterObj.userData.intakePort.clone(), op = this.filterObj.userData.outPort.clone();
-    const canMouth = L(new THREE.Vector3(cx, this.groundCanteen.position.y + 0.115 * PROP, cz));
+    const canMouth = L(new THREE.Vector3(cx, gm.position.y + (my - 0.005) * PROP, cz));
     const cupTop = L(new THREE.Vector3(this.cup.position.x, this.cup.position.y + 0.1 * PROP, this.cup.position.z));
     hoses.add(hose([ip, ip.clone().add(new THREE.Vector3(-0.05, -0.04, 0.03)), canMouth.clone().add(new THREE.Vector3(0.06, 0.07, 0.03)), canMouth.clone().add(new THREE.Vector3(0, 0.02, 0))], 0.0045, this.m.hose));
     hoses.add(hose([op, op.clone().add(new THREE.Vector3(0.05, -0.03, 0.0)), cupTop.clone().add(new THREE.Vector3(-0.02, 0.07, 0.0)), cupTop], 0.0045, this.m.silicone));
-    this.strainer.position.set(cx, this.groundCanteen.position.y + 0.02, cz + 0.0);
-    this.strainer.visible = false;                                         // the strainer is inside the canteen
+    this.strainer.position.set(cx, gm.position.y + 0.02, cz + 0.0);
+    this.strainer.visible = false;                                         // the strainer is inside the container
     this.cup.rotation.set(0, 0, 0);
     this.cup.userData.water.position.y = 0.006;
   }
 
   #finishPump(a) {
-    const c = this.canteen;
+    const c = a.c;
     const done = this.pumped || 0;
     if (done > 0) {
-      c.clean = c.water - done < 0.02;                                    // the part not yet pumped stays raw
-      if (c.clean) { c.risk = RISK.clean; c.turb = 0; c.from = 'filtered'; this.emit({ type: 'toast', text: `Filtered: ${c.water.toFixed(2)} L of clean water${this.filter.clog > 0.6 ? '. The element is clogging.' : '.'}` }); this.emit({ type: 'sound', name: 'ready' }); }
-      else this.emit({ type: 'toast', text: `${done.toFixed(2)} L filtered; the rest is still untreated.`, warn: true });
+      const frac = Math.min(1, done / Math.max(0.02, c.water)), S = SURV.pump;
+      for (const k of ['g', 'c', 'b', 'v']) c.haz[k] *= frac * S[k] + (1 - frac);   // the part not yet pumped stays raw
+      c.iod = null;
+      if (frac > 0.98) {
+        c.treated = true; c.how = 'filtered'; c.from = 'filtered';
+        this.emit({ type: 'toast', text: `Filtered: ${c.water.toFixed(2)} L${this.filter.clog > 0.6 ? '. The element is clogging.' : '.'} Viruses still get through a ceramic filter.` });
+        this.emit({ type: 'sound', name: 'ready' });
+      } else this.emit({ type: 'toast', text: `${done.toFixed(2)} L filtered; the rest is still untreated.`, warn: true });
     }
     this.pumped = 0;
     this.act = null;
@@ -451,10 +720,11 @@ export class Gear {
 
   #scrub(dt, a, ctx) {
     const f = this.filter;
-    if (!a.set) { this.#setStation(ctx, a); a.set = true; this.#layoutStation(a, ctx); this.filterObj.updateMatrixWorld(true); this.emit({ type: 'sound', name: 'creak' }); }
+    if (!a.set) { this.#setStation(ctx, a); a.set = true; this.#useModel(this.cur); this.#layoutStation(a, ctx); this.filterObj.updateMatrixWorld(true); this.emit({ type: 'sound', name: 'creak' }); }
     ctx.hiker.emote = 'Crouch Idle 01';
     this.station.visible = true;
     this.filterObj.visible = true; this.cup.visible = true; this.strainer.visible = false;
+    this.groundCanteen.visible = false; this.groundBag.visible = false;
     this.filterObj.rotation.z = 0.05 * Math.sin(a.t * 18);
     this.filterObj.userData.handle.position.y = 0.2;
     f.clog = Math.max(0.12, f.clog - dt * (f.clog - 0.1) * 0.5);

@@ -36,7 +36,8 @@ import { gustAt, WIND_DIR } from './wind.js';
 import { CrewTalk } from './crewtalk.js';
 import { Intro } from './intro.js';
 import { Hydration, relativeHumidity, heatIndexC, heatCategory, BODY_KG } from './hydration.js';
-import { Gear, CANTEEN_L } from './gear.js';
+import { Gear } from './gear.js';
+import { kindOf } from './water.js';
 import { PRESETS, resolveQuality, isTouch, SCALE } from './quality.js';
 import { setRangeK } from './cdlod.js';
 import { HorizonMap } from './culling.js';
@@ -780,9 +781,16 @@ const STAGE_TEXT = [
   'Critical. You are about to collapse.',
 ];
 
+function containerLabel(name, c) {
+  if (c.water < 0.02) return `${name} empty`;
+  const k = kindOf(c);
+  const how = k === 'waiting' ? `iodine ${Math.round(c.iod.t)}/${c.iod.req} min` : k === 'treated' ? (c.hot > 0 ? `${c.how}, hot` : c.how) : 'untreated';
+  return `${name} ${c.water.toFixed(2)} L · ${how}`;
+}
 function canteenLabel() {
-  const c = gear.canteen;
-  return c.water < 0.02 ? 'Canteen empty' : `Canteen ${c.water.toFixed(2)} L · ${c.clean ? 'filtered' : 'untreated'}`;
+  if (gear.sel === 'straw') return `LifeStraw · ${gear.straw.litres.toFixed(1)} L drunk through it`;
+  const a = gear.sel === 'bladder' ? ['Bladder', gear.bladder] : ['Canteen', gear.canteen], b = gear.sel === 'bladder' ? ['Canteen', gear.canteen] : ['Bladder', gear.bladder];
+  return `${containerLabel(a[0], a[1])}  ·  ${b[0]} ${b[1].water.toFixed(1)} L`;
 }
 
 /** The water in front of you within reach, or null. */
@@ -790,13 +798,13 @@ function waterAhead() {
   return gear.findWater(hiker.pos, hiker.yaw, waterAt, (x, z) => world.lakeAt(x, z), levelAt);
 }
 
-/** [U] with nothing else to use: dunk the canteen at the water, filter what is in it, or scrub a clogged element. */
+/** [U] with nothing else to use: dunk the container at the water, treat what is in it (pump, boil or iodine), or scrub a clogged element. */
 function waterUse() {
-  const c = gear.canteen, say = (why) => { if (why && why !== 'busy') hud.toast(why, 'warn'); return !why || why === 'busy'; };
-  const wt = waterAhead();
-  if (wt && c.water < CANTEEN_L - 0.02 && !(c.water > 0.02 && !c.clean && gear.filter.owned && c.water >= CANTEEN_L - 0.2)) return say(gear.fill(wt)) || true;
-  if (!c.clean && c.water > 0.02 && gear.filter.owned) return say(gear.pump()) || true;
-  if (gear.filter.clog >= 0.45 && !wt) return say(gear.scrub()) || true;
+  const c = gear.cur, say = (why) => { if (why && why !== 'busy') hud.toast(why, 'warn'); return !why || why === 'busy'; };
+  const wt = waterAhead(), k = kindOf(c);
+  if (wt && c.water < c.cap - 0.02 && !(c.water > 0.02 && k === 'raw' && c.water >= c.cap - 0.2)) return say(gear.fill(wt)) || true;
+  if (k === 'raw') return say(gear.treat()) || true;
+  if (gear.filter.clog >= 0.45 && !wt && gear.method === 'pump') return say(gear.scrub()) || true;
   return false;
 }
 
@@ -814,11 +822,11 @@ function hydrationStep(dt, live, p) {
   const sunW = 150 * clamp(sky.sunDir.y * 1.8, 0, 1) * (1 - weather.cloud * 0.75) * (1 - sky.terrainBlock) * (cv.forest > 0.5 ? 0.5 : 1);
   const rh = relativeHumidity({ tempC: tC, doy: calendar.doy, fog: weather.fog, precip: weather.precip * (1 - weather.snowK), cloud: weather.cloud });
   hydration.update(live ? dt : 0, {
-    speed: sp, grade: clamp(hiker.lastGrade || 0, -0.4, 0.5), loadKg: 9 + gear.canteen.water + (wood.carried || 0) * 1.5, activity,
+    speed: sp, grade: clamp(hiker.lastGrade || 0, -0.4, 0.5), loadKg: 9 + gear.carried + (wood.carried || 0) * 1.5, activity,
     tempC: tC, rh, wind: Math.max(0, weather.wind) * 7, sunW, elev: p.y,
   });
   // the canteen
-  const ctx = { p, yaw: hiker.yaw, first: rig.mode === 'first', hiker, hydration, dry: (x, z) => { const lk = world.lakeAt(x, z); return (!lk || world.height(x, z) > lk.level + 0.08) && !onStream(x, z); }, turbAt: (x, z) => waterCells.at(x, z).turbidity, groundY: (x, z) => world.height(x, z) };
+  const ctx = { p, yaw: hiker.yaw, first: rig.mode === 'first', hiker, hydration, fire: camp.fire ? { x: camp.fire.x, z: camp.fire.z } : null, waterC: clamp(tC - 2, 2, 20), gm: live ? dt * (state.resting ? 8 : 1) * settings.timeScale : 0, dry: (x, z) => { const lk = world.lakeAt(x, z); return (!lk || world.height(x, z) > lk.level + 0.08) && !onStream(x, z); }, turbAt: (x, z) => waterCells.at(x, z).turbidity, groundY: (x, z) => world.height(x, z) };
   for (const e of gear.update(live ? dt : 0, ctx)) {
     if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
     else if (e.type === 'sound') audio[GEAR_SOUND[e.name] || e.name]?.();
@@ -837,18 +845,21 @@ function hydrationStep(dt, live, p) {
   if (live && hydration.collapsed && !state.rescue) rescue('You collapsed from thirst.');
   // what [U] and [Y] would do right now
   if ((hintTick = (hintTick + 1) % 8) === 0) hintWater = gear.act ? null : waterAhead();
-  if (live && gear.busy && rig.mode === 'first') hiker.pitch += ((gear.act.kind === 'fill' ? -0.55 : -1.0) - hiker.pitch) * Math.min(1, dt * 2.5);   // you look down at your hands
-  const c = gear.canteen;
+  if (live && gear.busy && rig.mode === 'first') hiker.pitch += ((gear.act.kind === 'fill' || gear.act.kind === 'straw' ? -0.55 : -1.0) - hiker.pitch) * Math.min(1, dt * 2.5);   // you look down at your hands
+  const c = gear.cur, k = kindOf(c), nm = gear.sel === 'bladder' ? 'bladder' : 'canteen', how = { pump: 'filter', boil: 'boil', iodine: 'add iodine to' }[gear.method];
   if (gear.busy) waterHint = 'Hold still to keep going  ·  move to stop';
-  else if (hintWater && c.water < CANTEEN_L - 0.02) waterHint = '[U] fill the canteen';
-  else if (!c.clean && c.water > 0.02 && gear.filter.owned && hiker.mode === 'walk') waterHint = c.turb > 0.3 ? '[U] filter the water (it is silty)  ·  [Y] drink' : '[U] filter the water  ·  [Y] drink';
+  else if (gear.sel === 'straw') waterHint = hintWater ? '[Y] drink through the LifeStraw' : '';
+  else if (hintWater && c.water < c.cap - 0.02) waterHint = `[U] fill the ${nm}`;
+  else if (k === 'raw' && hiker.mode === 'walk') waterHint = `[U] ${how} the water${c.turb > 0.3 ? ' (it is silty)' : ''}  ·  [4] change method  ·  [Y] drink`;
   else if (hydration.pct >= 0.9 && c.water > 0.02) waterHint = '[Y] drink';
   else waterHint = '';
 }
 
 function act() {
   const p = hiker.pos;
-  if (pressed.has('KeyY') && !state.ask && !atv.riding && !state.cut && hiker.mode !== 'climb') { const why = gear.drink(); if (why && why !== 'busy') hud.toast(why, 'warn'); }
+  if (pressed.has('KeyY') && !state.ask && !atv.riding && !state.cut && hiker.mode !== 'climb') { const why = gear.drink(waterAhead()); if (why && why !== 'busy') hud.toast(why, 'warn'); }
+  for (const [code, k] of [['Digit1', 'canteen'], ['Digit2', 'bladder'], ['Digit3', 'straw']]) if (pressed.has(code) && !state.ask) { const m = gear.select(k); if (m) hud.toast(m); }
+  if (pressed.has('Digit4') && !state.ask) { const m = gear.cycleMethod(); if (m) hud.toast(m); }
   const fx = -Math.sin(hiker.yaw), fz = -Math.cos(hiker.yaw);
   // the quad, a stool, a fishing line, a marshmallow
   if (pressed.has('KeyU')) {
@@ -1213,6 +1224,7 @@ function finishSleep() {
   let mins = (s.to - s.from) * 60;
   if (mins < 0) mins += 24 * 60;
   advanceClock(mins);
+  gear.advance(mins);
   hydration.sleep(mins / 60, { tempC: 4, rh: 0.5, elev: hiker.pos.y });   // a night without water costs 0.4 to 1%
   weather.settle(state.day, state.hour);
   hiker.stamina = 100; hiker.warmth = Math.max(hiker.warmth, 85); hiker.injured = 0; hiker.wet = 0;
@@ -1904,7 +1916,7 @@ function tick(dt, draw = true) {
       yaw: hiker.yaw, place, sub, elev: p.y, night: sky.sunDir.y < -0.03, coords: latLon(p),
       clock: `${calendar.dateLabel} · ${clock(state.hour)}`, tempC: env.tempC, wx: weather.label,
       stamina: hiker.stamina, warmth: hiker.warmth, grip: hiker.grip, climbing: hiker.mode === 'climb',
-      water: clamp(100 - hydration.pct * 11, 0, 100), dehydration: clamp((hydration.pct - 2.5) / 5, 0, 0.9), canteen: canteenLabel(), canteenKind: gear.canteen.water < 0.02 ? 'empty' : gear.canteen.clean ? 'clean' : 'raw',
+      water: clamp(100 - hydration.pct * 11, 0, 100), dehydration: clamp((hydration.pct - 2.5) / 5, 0, 0.9), canteen: canteenLabel(), canteenKind: gear.sel === 'straw' ? 'clean' : ({ empty: 'empty', raw: 'raw', waiting: 'raw', treated: 'clean' })[kindOf(gear.cur)],
       hint, injured: hiker.injured > 0, status, tool: hiker.tool === 'fists' ? '' : TOOL_NAME[hiker.tool],
       discovered: state.discovered, tent: camp.tent, x: p.x, z: p.z,
       lakesFound: found, lakesTotal: lakeNames.length,

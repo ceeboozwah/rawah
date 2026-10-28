@@ -69,7 +69,7 @@ export class LensFlare {
     this.shown += (target - this.shown) * 0.2;
     g.clearRect(0, 0, cv.width, cv.height);
     const I = this.shown;
-    if (I < 0.004) return;
+    if (I < 0.004 || !Number.isFinite(this.sx) || !Number.isFinite(this.sy)) return;
     const h = cv.height, cx = cv.width / 2, cy = cv.height / 2, sx = this.sx, sy = this.sy;
     const warm = THREE.MathUtils.lerp(255, 215, 1 - THREE.MathUtils.smoothstep(sd.y, 0.02, 0.5));   // low sun is amber
     const glow = (x, y, r, a, c, e = 1) => {

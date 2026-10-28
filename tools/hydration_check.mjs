@@ -84,13 +84,29 @@ if (sleepy.pct < 0.3 || sleepy.pct > 1.4) fail.push('a night asleep without wate
   console.log(`over-full by 1 L, an hour at rest: ${(o.deficit).toFixed(2)} L (the kidneys shed the surplus)`);
   if (o.deficit < -0.5) fail.push('a surplus should be passed within the hour');
 }
-// untreated water: 5 L of raw lake water at 0.34 per litre against filtered at 0.002
+// untreated water and what each treatment leaves (src/gear.js)
 {
+  const { sourceHaz, sumH } = await import('../src/water.js');
+  const avg = (kind) => { let t = 0, n = 0; for (let x = 0; x < 3000; x += 70) for (let z = 0; z < 3000; z += 70) { t += sumH(sourceHaz(kind, x, z)); n++; } return t / n; };
+  const stream = avg('stream'), lake = avg('lake');
+  const per = (h, litres) => 1 - Math.exp(-h * litres);
+  console.log(`untreated, average spot: stream ${(stream * 100).toFixed(1)}%/L, lake ${(lake * 100).toFixed(1)}%/L; a hiker drinking 2 L a day for 5 days: stream ${(per(stream, 10) * 100).toFixed(0)}%, lake ${(per(lake, 10) * 100).toFixed(0)}%`);
+  if (stream < 0.025 || stream > 0.07) fail.push('stream hazard off');
+  if (per(stream, 10) < 0.2 || per(stream, 10) > 0.6) fail.push('5 days of untreated stream water should make a third of hikers ill, give or take');
+  const h = sourceHaz('stream', 100, 100), tot = sumH(h);
+  const left = { pump: (h.g + h.c + h.b) * 1e-3 + h.v, straw: (h.g + h.c) * 1e-3 + h.b * 1e-6 + h.v, boil: tot * 1e-6 };
+  console.log('what is left per litre of a stream (untreated 100%):', Object.entries(left).map(([k, v]) => `${k} ${(v / tot * 100).toFixed(2)}%`).join(' | '));
+  if (left.pump / tot > 0.15 || left.pump / tot < 0.05) fail.push('a ceramic pump should leave about the virus share');
+  if (left.boil / tot > 1e-5) fail.push('boiling should leave nothing');
+  // iodine: the table at 10 C clear water (60 min)
+  const req = 60, I = (t) => ({ g: 10 ** (-3 * Math.min(1, t / (req * 3))), c: 10 ** (-0.15 * Math.min(1, t / req)), b: 10 ** (-4 * Math.min(1, t / req)), v: 10 ** (-3 * Math.min(1, t / req)) });
+  for (const t of [15, 30, 60, 180]) { const f = I(t); console.log(`iodine ${t} min: giardia ${(f.g * 100).toPrecision(2)}% crypto ${(f.c * 100).toFixed(0)}% bacteria ${(f.b * 100).toPrecision(2)}% virus ${(f.v * 100).toPrecision(2)}%`); }
+  const after = I(60); const rem = h.g * after.g + h.c * after.c + h.b * after.b + h.v * after.v;
+  console.log(`iodine after its hour leaves ${(rem / tot * 100).toFixed(0)}% of the risk (Giardia and Cryptosporidium are the rest)`);
+  if (rem / tot < 0.1 || rem / tot > 0.5) fail.push('an hour of iodine should leave the protozoa share');
   let raw = 0, filt = 0;
-  for (let i = 0; i < 4000; i++) { const a = new Hydration(), b = new Hydration(); if (a.swallowRaw(1, 0.34)) raw++; if (b.swallowRaw(1, 0.002)) filt++; }
-  console.log(`one litre drunk: raw lake water made ${(raw / 40).toFixed(0)}% ill, filtered ${(filt / 40).toFixed(1)}%`);
-  if (raw < 1100 || raw > 1700) fail.push('raw lake water risk is off');
-  if (filt > 40) fail.push('filtered water should be nearly safe');
+  for (let i = 0; i < 4000; i++) { const a = new Hydration(), b = new Hydration(); if (a.swallowRaw(1, stream)) raw++; if (b.swallowRaw(1, left.pump)) filt++; }
+  console.log(`one litre drunk: raw stream made ${(raw / 40).toFixed(1)}% ill, pumped ${(filt / 40).toFixed(2)}%`);
   const sick = new Hydration(); sick.pace = 4; sick.infected = { t: 1 };
   sick.update(2, { tempC: 18, rh: 0.4, activity: 'rest' });
   const at = sick.ill ? sick.ill.sev : 0;
