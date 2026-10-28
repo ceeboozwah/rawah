@@ -49,6 +49,7 @@ import { Coffee } from './coffee.js';
 import { Dump } from './dump.js';
 import { Breakfast } from './breakfast.js';
 import { Plume } from './plume.js';
+import { SmokeColumn } from './smokecolumn.js';
 import { WaveField, WATER } from './waves.js';
 import { WaterCells } from './waterbox.js';
 import { Lightning } from './lightning.js';
@@ -274,6 +275,7 @@ props.wood = wood;
 const coffee = new Coffee(world, scene);
 const dump = new Dump(scene, world);
 const plume = new Plume(world, scene);
+const smokeCol = new SmokeColumn(scene);
 const flare = new LensFlare();
 flare.on = settings.flare;
 const mist = new Mist(world);                                  // the air the boxels hold (src/shafts.js)
@@ -530,7 +532,7 @@ function begin(fresh) {
     state.discovered = new Set();
     hiker.stamina = hiker.warmth = 100;
     props.reset();
-    hydration.reset(); gear.reset();
+    hydration.reset(); gear.reset(); smokeCol.reset();
     party.races = { won: 0, lost: 0 };
     guide.load([]);
     state.slept = 0;
@@ -1664,6 +1666,7 @@ function tick(dt, draw = true) {
       const wind = Math.min(1, 0.2 + Math.max(0, weather.wind) * 0.9), pan = breakfast.pan.visible && breakfast.cook > 1.1 ? breakfast.pan.getWorldPosition(_pw) : null;
       plume.update(state.paused ? 0 : dt, { fire: camp.fire, pan: pan && { x: pan.x, z: pan.z, level: Math.min(0.8, (breakfast.cook - 1.1) * 1.4) }, wind, p: hiker.pos });
       camp.fireObj.smoke.material.uniforms.uDrift.value.set(plume.dir[0] * (0.5 + 2.2 * wind), plume.dir[1] * (0.5 + 2.2 * wind));
+      smokeCol.update(t, state.paused ? 0 : dt, { fire: camp.fire, fuel: camp.fire ? camp.fire.life / 25 : 0, groundY: (x, z) => world.height(x, z), drift: [plume.dir[0] * (0.5 + 2.2 * wind), plume.dir[1] * (0.5 + 2.2 * wind)], light: sky.light, sun: sky.sun.color, scale: flameScale() });
       const air = plume.at(hiker.pos.x, hiker.pos.z);
       if (air.smoke > 0.12 && !state.paused) {
         hiker.stamina = Math.min(hiker.stamina, 100 - 70 * air.smoke);   // you cannot catch your breath in it
@@ -1976,7 +1979,7 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, hydration, gear, flare,
+    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, hydration, gear, smokeCol, flare,
     benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },

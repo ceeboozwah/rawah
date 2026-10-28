@@ -73,6 +73,7 @@ export class LensFlare {
     const h = cv.height, cx = cv.width / 2, cy = cv.height / 2, sx = this.sx, sy = this.sy;
     const warm = THREE.MathUtils.lerp(255, 215, 1 - THREE.MathUtils.smoothstep(sd.y, 0.02, 0.5));   // low sun is amber
     const glow = (x, y, r, a, c, e = 1) => {
+      if (!Number.isFinite(x + y + r + a)) return;
       const gr = g.createRadialGradient(x, y, 0, x, y, r);
       gr.addColorStop(0, `rgba(${c[0]},${c[1]},${c[2]},${a * e})`);
       gr.addColorStop(0.4, `rgba(${c[0]},${c[1]},${c[2]},${a * 0.25 * e})`);
