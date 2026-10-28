@@ -425,13 +425,16 @@ export class Hiker {
     if (this.mode === 'walk' && this.grounded) {
       const sprint = working && Math.hypot(this.vel.x, this.vel.z) > 3.6;
       const climbGrade = Math.max(0, this.lastGrade || 0);
-      if (sprint) this.stamina -= (13 + climbGrade * 14) * dt;
-      else if (working) this.stamina += (7 - climbGrade * 22) * thin * dt;
-      else this.stamina += 14 * thin * dt;
+      const cap = env.hydCap ?? 1;       // what dehydration leaves of your capacity (src/hydration.js)
+      if (sprint) this.stamina -= ((13 + climbGrade * 14) * dt) / cap;
+      else if (working) { const g = (7 - climbGrade * 22) * thin * dt; this.stamina += g > 0 ? g * cap : g / cap; }
+      else this.stamina += 14 * thin * cap * dt;
       if (this.mode !== 'climb') this.grip = Math.min(100, this.grip + 20 * dt);
     } else if (this.mode === 'swim') this.stamina -= 3 * dt;
     if (env.resting) this.stamina += 20 * dt;
     if (this.warmth < 25) this.stamina = Math.min(this.stamina, 60);
+    const hcap = 100 * Math.max(0.3, env.hydCap ?? 1);
+    if (this.stamina > hcap) this.stamina -= (this.stamina - hcap) * Math.min(1, dt * 1.5);   // a dry body will not hold a full tank
     this.stamina = clamp(this.stamina, 0, 100);
 
     // warmth follows air temperature, wind, wetness, fire and shelter

@@ -527,3 +527,11 @@ body.touch #ask { bottom: 150px; }
 #cine-place { font: 400 clamp(30px, 5vw, 54px)/1.05 var(--display); }
 #cine-sub { margin-top: 6px; font: 600 var(--t-md) var(--sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
 #cine-skip { position: absolute; right: 4vw; bottom: calc(11vh + 3vh); opacity: 0; font: 500 var(--t-xs) var(--sans); letter-spacing: 0.08em; color: var(--dim); }
+
+/* water: the hydration bar, the canteen under it, and the dry-mouth vignette */
+#bar-water i { background: var(--navy-light); }
+#canteen-chip { margin-top: -2px; font: 600 var(--t-xs) var(--sans); letter-spacing: 0.06em; color: var(--dim); text-shadow: 0 1px 8px rgba(0, 0, 0, 0.7); }
+#canteen-chip.raw { color: #e8b27a; }
+#canteen-chip.clean { color: var(--navy-light); }
+#thirst { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 1.2s; z-index: 5;
+  background: radial-gradient(ellipse at center, transparent 38%, rgba(20, 14, 8, 0.7) 100%); backdrop-filter: saturate(0.75); }

@@ -35,6 +35,8 @@ import { skyViewTexture } from './skyview.js';
 import { gustAt, WIND_DIR } from './wind.js';
 import { CrewTalk } from './crewtalk.js';
 import { Intro } from './intro.js';
+import { Hydration, relativeHumidity, heatIndexC, heatCategory, BODY_KG } from './hydration.js';
+import { Gear, CANTEEN_L } from './gear.js';
 import { PRESETS, resolveQuality, isTouch, SCALE } from './quality.js';
 import { setRangeK } from './cdlod.js';
 import { HorizonMap } from './culling.js';
@@ -79,6 +81,7 @@ settings.shadows ??= Q.shadows;
 settings.shafts ??= Q.shafts > 0;
 settings.flare ??= true;
 settings.relief ??= QUALITY !== 'low';
+settings.hydroPace ??= 4;          // physiological hours per hour of play (src/hydration.js): the medical ratios are real, the clock is compressed
 settings.intro ??= true;           // the opening drive and arrival on a new game (src/intro.js)
 settings.crew ??= false;          // the friends talk about what reaches them (src/crewtalk.js); off until you turn it on
 settings.mirror ??= Q.shafts > 0;
@@ -256,6 +259,9 @@ for (const a of party.actors) a.char.ground = avatar.ground;
 party.camera = camera;
 party.onRace = (r) => raceEnded(r);
 const rig = new CameraRig(camera, world, hiker, avatar);
+const hydration = new Hydration();   // the body's water balance (src/hydration.js)
+hydration.pace = settings.hydroPace;
+const gear = new Gear({ scene, camera, avatar, world });   // the canteen and the pump filter (src/gear.js)
 const intro = new Intro(world, scene, camera, models);   // the truck and the car come down the road and park; the friends step out
 // the family tent's walls and floor
 for (const b of [hiker, atv, party]) b.solids = (p, r) => camp.collide(p, r);
@@ -324,7 +330,7 @@ function save() {
     x: hiker.pos.x, z: hiker.pos.z, yaw: hiker.yaw, hour: state.hour, day: state.day, km: state.km,
     discovered: [...state.discovered], camp: camp.save(),
     atv: { x: atv.pos.x, z: atv.pos.z, yaw: atv.yaw }, fish: fishing.save(), roast: { eaten: roast.eaten, perfect: roast.perfect }, wood: wood.save(), coffee: coffee.save(), breakfast: breakfast.save(),
-    stamina: hiker.stamina, warmth: hiker.warmth, weather: weather.save(), props: props.save(), sculpt: mind.save(), races: party.races, guide: guide.save(), slept: state.slept || 0,
+    stamina: hiker.stamina, warmth: hiker.warmth, hyd: hydration.save(), gear: gear.save(), weather: weather.save(), props: props.save(), sculpt: mind.save(), races: party.races, guide: guide.save(), slept: state.slept || 0,
   };
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch { /* private mode */ }
 }
@@ -349,6 +355,7 @@ function restore() {
   if (s.races) party.races = s.races;
   guide.load(s.guide);
   state.slept = s.slept || 0;
+  hydration.load(s.hyd); gear.load(s.gear);
   mind.load(s.sculpt);
   shaped({ x0: -Infinity, z0: -Infinity, x1: Infinity, z1: Infinity });
   return true;
@@ -522,6 +529,7 @@ function begin(fresh) {
     state.discovered = new Set();
     hiker.stamina = hiker.warmth = 100;
     props.reset();
+    hydration.reset(); gear.reset();
     party.races = { won: 0, lost: 0 };
     guide.load([]);
     state.slept = 0;
@@ -682,6 +690,7 @@ bindRange('set-fovfx', 'fovfx', () => { rig.fovFx = settings.fovfx; }, (v) => (v
 rig.fovFx = settings.fovfx;
 bindRange('set-volume', 'volume', () => audio.setVolume(settings.volume), (v) => `${Math.round(v * 100)}%`);
 bindRange('set-time', 'timeScale', null, (v) => `${v.toFixed(1)}×`);
+bindRange('set-hydro', 'hydroPace', () => { hydration.pace = settings.hydroPace; }, (v) => `${v.toFixed(0)}×`);
 $('set-depth').value = settings.depth === 'extended' ? 'extended' : 'standard';
 $('set-depth').onchange = () => {
   settings.depth = $('set-depth').value;
@@ -758,8 +767,88 @@ function renderJournal() {
 }
 
 // ------------------------------------------------------------------ actions
+// ------------------------------------------------------------------ water (src/hydration.js, src/gear.js)
+let waterHint = '', lastStage = 0, nagAt = 0, hintTick = 0, hintWater = null;
+const levelAt = (x, z) => { const lk = world.lakeAt(x, z); return lk ? lk.level : world.height(x, z); };
+const GEAR_SOUND = { gulp: 'sip', pump: 'creak', plop: 'plop', lid: 'lid', ready: 'ready', creak: 'creak', pour: 'pour' };
+const STAGE_TEXT = [
+  '',
+  'You are getting thirsty. Drink some water [Y].',
+  'Dehydrated: your legs feel heavy and your head aches.',
+  'Badly dehydrated. Drink now and ease off.',
+  'Heat exhaustion: cramps, nausea, dizziness. You need water now.',
+  'Critical. You are about to collapse.',
+];
+
+function canteenLabel() {
+  const c = gear.canteen;
+  return c.water < 0.02 ? 'Canteen empty' : `Canteen ${c.water.toFixed(2)} L · ${c.clean ? 'filtered' : 'untreated'}`;
+}
+
+/** The water in front of you within reach, or null. */
+function waterAhead() {
+  return gear.findWater(hiker.pos, hiker.yaw, waterAt, (x, z) => world.lakeAt(x, z), levelAt);
+}
+
+/** [U] with nothing else to use: dunk the canteen at the water, filter what is in it, or scrub a clogged element. */
+function waterUse() {
+  const c = gear.canteen, say = (why) => { if (why && why !== 'busy') hud.toast(why, 'warn'); return !why || why === 'busy'; };
+  const wt = waterAhead();
+  if (wt && c.water < CANTEEN_L - 0.02 && !(c.water > 0.02 && !c.clean && gear.filter.owned && c.water >= CANTEEN_L - 0.2)) return say(gear.fill(wt)) || true;
+  if (!c.clean && c.water > 0.02 && gear.filter.owned) return say(gear.pump()) || true;
+  if (gear.filter.clog >= 0.45 && !wt) return say(gear.scrub()) || true;
+  return false;
+}
+
+/** One frame of the body's water balance and of what you are doing with the canteen. */
+function hydrationStep(dt, live, p) {
+  const tC = tempC(state.hour, p.y);
+  const cv = world.cover(p.x, p.z, p.y);
+  const sp = Math.hypot(hiker.vel.x, hiker.vel.z);
+  let activity = 'walk';
+  if (state.sleeping) activity = 'sleep';
+  else if (atv.riding || state.seat >= 0 || gear.busy) activity = 'rest';
+  else if (hiker.mode === 'swim') activity = 'swim';
+  else if (hiker.action && hiker.action.kind === 'chop') activity = 'work';
+  else if (sp < 0.2) activity = 'rest';
+  const sunW = 150 * clamp(sky.sunDir.y * 1.8, 0, 1) * (1 - weather.cloud * 0.75) * (1 - sky.terrainBlock) * (cv.forest > 0.5 ? 0.5 : 1);
+  const rh = relativeHumidity({ tempC: tC, doy: calendar.doy, fog: weather.fog, precip: weather.precip * (1 - weather.snowK), cloud: weather.cloud });
+  hydration.update(live ? dt : 0, {
+    speed: sp, grade: clamp(hiker.lastGrade || 0, -0.4, 0.5), loadKg: 9 + gear.canteen.water + (wood.carried || 0) * 1.5, activity,
+    tempC: tC, rh, wind: Math.max(0, weather.wind) * 7, sunW, elev: p.y,
+  });
+  // the canteen
+  const ctx = { p, yaw: hiker.yaw, first: rig.mode === 'first', hiker, hydration, dry: (x, z) => { const lk = world.lakeAt(x, z); return (!lk || world.height(x, z) > lk.level + 0.08) && !onStream(x, z); }, turbAt: (x, z) => waterCells.at(x, z).turbidity, groundY: (x, z) => world.height(x, z) };
+  for (const e of gear.update(live ? dt : 0, ctx)) {
+    if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
+    else if (e.type === 'sound') audio[GEAR_SOUND[e.name] || e.name]?.();
+    else if (e.type === 'ripple') { lakes.ripple(e.x, e.z, e.amp); waves.drop(e.x, e.z, 0.18, 0.004); }
+    else if (e.type === 'stir') waterCells.stir(e.x, e.z, e.a, onStream(e.x, e.z));
+    else if (e.type === 'sick') { /* the infection took; it shows later */ }
+  }
+  if (hydration.ill && hydration.ill.start) { hydration.ill.start = false; hud.toast('Your stomach cramps and turns. That water was not clean.', 'warn'); party.event('sick'); }
+  // the stage, in words
+  const stage = hydration.stage.id;
+  if (live && stage > lastStage && STAGE_TEXT[stage]) hud.toast(STAGE_TEXT[stage], stage >= 3 ? 'warn' : '');
+  else if (live && stage === 0 && lastStage >= 2) hud.toast('You feel hydrated again.');
+  lastStage = stage;
+  const now = performance.now() / 1000;
+  if (live && stage >= 2 && now - nagAt > 150) { nagAt = now; party.event('thirst'); }
+  if (live && hydration.collapsed && !state.rescue) rescue('You collapsed from thirst.');
+  // what [U] and [Y] would do right now
+  if ((hintTick = (hintTick + 1) % 8) === 0) hintWater = gear.act ? null : waterAhead();
+  if (live && gear.busy && rig.mode === 'first') hiker.pitch += ((gear.act.kind === 'fill' ? -0.55 : -1.0) - hiker.pitch) * Math.min(1, dt * 2.5);   // you look down at your hands
+  const c = gear.canteen;
+  if (gear.busy) waterHint = 'Hold still to keep going  ·  move to stop';
+  else if (hintWater && c.water < CANTEEN_L - 0.02) waterHint = '[U] fill the canteen';
+  else if (!c.clean && c.water > 0.02 && gear.filter.owned && hiker.mode === 'walk') waterHint = c.turb > 0.3 ? '[U] filter the water (it is silty)  ·  [Y] drink' : '[U] filter the water  ·  [Y] drink';
+  else if (hydration.pct >= 0.9 && c.water > 0.02) waterHint = '[Y] drink';
+  else waterHint = '';
+}
+
 function act() {
   const p = hiker.pos;
+  if (pressed.has('KeyY') && !state.ask && !atv.riding && !state.cut && hiker.mode !== 'climb') { const why = gear.drink(); if (why && why !== 'busy') hud.toast(why, 'warn'); }
   const fx = -Math.sin(hiker.yaw), fz = -Math.cos(hiker.yaw);
   // the quad, a stool, a fishing line, a marshmallow
   if (pressed.has('KeyU')) {
@@ -770,7 +859,9 @@ function act() {
       const dAtv = atv.near(p) ? Math.hypot(atv.pos.x - p.x, atv.pos.z - p.z) : Infinity;
       const dWood = Math.min(wood.stackDist(p), wood.carried > 0 || wood.campCount > 0 ? wood.pileDist(p) : Infinity);
       const dCof = coffee.reach(p, hiker.yaw), dBrk = breakfast.reach(p, hiker.yaw);
-      if (dBrk < dCof) { if (breakfast.interact()) save(); }
+      const dNear = Math.min(dStool, dAtv, dWood, dCof, dBrk);
+      if (dNear > 3.2 && waterUse()) { /* the canteen: fill, filter or scrub */ }
+      else if (dBrk < dCof) { if (breakfast.interact()) save(); }
       else if (dCof < Infinity) { if (coffee.interact(p)) save(); }
       else if (dWood < 3.2 && dWood < dStool && dWood < dAtv) { if (wood.interact(p)) save(); }
       else if (dAtv < dStool && dAtv < Infinity) mountATV();
@@ -1106,6 +1197,7 @@ function cullView() {
 }
 
 function startSleep() {
+  gear.cancel();
   dismountATV(); fishing.cancel(); standUp(); roast.drop();
   const h = state.hour;
   const night = h >= 19 || h < 5;
@@ -1121,6 +1213,7 @@ function finishSleep() {
   let mins = (s.to - s.from) * 60;
   if (mins < 0) mins += 24 * 60;
   advanceClock(mins);
+  hydration.sleep(mins / 60, { tempC: 4, rh: 0.5, elev: hiker.pos.y });   // a night without water costs 0.4 to 1%
   weather.settle(state.day, state.hour);
   hiker.stamina = 100; hiker.warmth = Math.max(hiker.warmth, 85); hiker.injured = 0; hiker.wet = 0;
   camp.douse();
@@ -1159,6 +1252,7 @@ function finishRescue() {
   } else spawnAtCar();
   advanceClock(120);
   hiker.injured = 60; hiker.stamina = 40;
+  hydration.deficit = Math.min(hydration.deficit, 0.035 * BODY_KG); hydration.stomach += 0.25;   // your friends get some water into you
   state.rescue = null;
   $('fade').classList.remove('on');
 }
@@ -1477,6 +1571,7 @@ function tick(dt, draw = true) {
   ctl.stomp = live && pressed.has('KeyG');
   // fishing: the lean (A/D or a mouse swing), the reel (held Space) and the hook (Space pressed)
   const fishInp = { x: clamp(ctl.move.x + (ctl.lookX / Math.max(dt, 0.001)) / 3, -1, 1), reel: live && keys.has('Space'), hook: live && pressed.has('Space') };
+  if (gear.busy) { if (ctl.move.lengthSq() > 0.04 || ctl.jump) gear.cancel(); else { ctl.move.set(0, 0); ctl.jump = false; } }   // kneeling at the water or pumping: move and it stops
   if (fishing.locked) { ctl.move.set(0, 0); ctl.jump = false; ctl.lookX = 0; ctl.lookY = 0; }
   if (roast.active || state.seat >= 0) ctl.jump = false;
   if (state.seat >= 0 || state.cut || state.intro || atv.riding) { ctl.move.set(0, 0); ctl.punch = ctl.hook = ctl.stomp = ctl.grab = false; ctl.jump = false; }
@@ -1488,7 +1583,9 @@ function tick(dt, draw = true) {
     fireWarm: Math.min(1, plume.at(p.x, p.z).heat / 0.2),   // heat from the fire's certified field, thinning with distance and blown downwind
     inTent: !!state.sleeping,
     resting: state.resting,
+    hydCap: hydration.capacity,       // what dehydration leaves of your stamina
   };
+  hydrationStep(dt, live, p);
   if (live) {
     const before = hiker.pos.clone();
     const events = state.intro ? introStep(dt, env) : state.cut ? cutStep(dt, env) : state.seat >= 0 ? seatedStep(dt, env) : atv.riding ? rideStep(dt, env) : hiker.update(dt, ctl, env);
@@ -1724,7 +1821,7 @@ function tick(dt, draw = true) {
   const wspd = 2 + Math.max(0, weather.wind) * 9;
   precip.update(state.paused ? 0 : dt, camera, weather, [WIND_DIR[0] * wspd, WIND_DIR[1] * wspd], precipLight.copy(sky.hemi.color).multiplyScalar(0.2 + sky.light * 0.75 + weather.flash));
   const tC = tempC(h, p.y);
-  grass.clear(camp.fire && [camp.fire.x, camp.fire.z, 1.9], camp.tent && (camp.tent.kind === 'family' ? [camp.tent.x - Math.sin(camp.tent.yaw) * 3.3, camp.tent.z - Math.cos(camp.tent.yaw) * 3.3, camp.tent.x + Math.sin(camp.tent.yaw) * 3.6, camp.tent.z + Math.cos(camp.tent.yaw) * 3.6, 2.3] : [camp.tent.x, camp.tent.z, 3.0]), ...wood.clearings(hiker.pos), ...dump.clearings(hiker.pos));
+  grass.clear(camp.fire && [camp.fire.x, camp.fire.z, 1.9], camp.tent && (camp.tent.kind === 'family' ? [camp.tent.x - Math.sin(camp.tent.yaw) * 3.3, camp.tent.z - Math.cos(camp.tent.yaw) * 3.3, camp.tent.x + Math.sin(camp.tent.yaw) * 3.6, camp.tent.z + Math.cos(camp.tent.yaw) * 3.6, 2.3] : [camp.tent.x, camp.tent.z, 3.0]), ...wood.clearings(hiker.pos), ...dump.clearings(hiker.pos), ...gear.clearings());
   grass.update(camera, hiker, clamp((1.5 - tC) / 4, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0), calendar.cure, avatar.heading, renderer);
   // the ground remembers: footsteps wear it, rain wets it, sun dries it —
   // every event's certified cone decides which cells the sim may skip
@@ -1790,6 +1887,7 @@ function tick(dt, draw = true) {
     if (!hint && camp.near(p, 'tent', 4.5)) hint = state.hour >= 19 || state.hour < 5 ? '[Z] sleep until morning · [F] fire · [C] pack up' : '[Z] nap · [F] fire · [C] pack up';
     if (!hint && sky.light < 0.35 && !camp.tent && hiker.mode === 'walk') hint = 'Getting dark — find flat ground away from water and [C] make camp';
     if (!hint && sky.light < 0.2 && !state.lamp) hint = '[L] headlamp';
+    if (!hint && waterHint) hint = waterHint;
     if (!hint && fishing.hint) hint = fishing.hint;
     if (!hint && state.seat < 0 && camp.fire && Math.hypot(camp.fire.x - p.x, camp.fire.z - p.z) < 3.8 && !fishing.busy) hint = '[U] sit · [N] roast a marshmallow';
     if (!hint && !atv.riding && !fishing.busy && fishing.spotAhead({ pos: p, yaw: hiker.yaw, mode: hiker.mode })) hint = '[B] cast a line';
@@ -1806,6 +1904,7 @@ function tick(dt, draw = true) {
       yaw: hiker.yaw, place, sub, elev: p.y, night: sky.sunDir.y < -0.03, coords: latLon(p),
       clock: `${calendar.dateLabel} · ${clock(state.hour)}`, tempC: env.tempC, wx: weather.label,
       stamina: hiker.stamina, warmth: hiker.warmth, grip: hiker.grip, climbing: hiker.mode === 'climb',
+      water: clamp(100 - hydration.pct * 11, 0, 100), dehydration: clamp((hydration.pct - 2.5) / 5, 0, 0.9), canteen: canteenLabel(), canteenKind: gear.canteen.water < 0.02 ? 'empty' : gear.canteen.clean ? 'clean' : 'raw',
       hint, injured: hiker.injured > 0, status, tool: hiker.tool === 'fists' ? '' : TOOL_NAME[hiker.tool],
       discovered: state.discovered, tent: camp.tent, x: p.x, z: p.z,
       lakesFound: found, lakesTotal: lakeNames.length,
@@ -1865,7 +1964,7 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro,
+    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, hydration, gear, flare,
     benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, rig, avatar, party, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },

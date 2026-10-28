@@ -64,9 +64,13 @@ export class Hud {
     this.#put('wx', `${svg(iconFor(s.wx, s.night))}${esc(s.wx)}`, true);
     setBar('stamina', s.stamina);
     setBar('warmth', s.warmth);
+    setBar('water', s.water ?? 100);
+    this.#put('canteen-chip', s.canteen || '');
+    $('canteen-chip').className = s.canteen ? s.canteenKind || '' : 'hidden';
+    $('thirst').style.opacity = s.dehydration || 0;
     setBar('grip', s.grip);
     $('bar-grip').classList.toggle('hidden', !s.climbing && s.grip > 99);
-    $('bars').classList.toggle('calm', s.stamina > 96 && s.warmth > 60 && !s.climbing);
+    $('bars').classList.toggle('calm', s.stamina > 96 && s.warmth > 60 && (s.water ?? 100) > 80 && !s.climbing);
     this.#put('hint', s.hint ? keys(s.hint, this.mode) + `<!--${this.mode}-->` : '', true);
     $('hint').classList.toggle('hidden', !s.hint);
     $('frost').style.opacity = clamp((35 - s.warmth) / 35, 0, 1) * 0.9;

@@ -64,6 +64,8 @@ export class LensFlare {
       target = edge * day * this.treeVis * (1 - sky.terrainBlock) * (1 - 0.9 * sky.sunBlock) * (1 - 0.85 * overcast) * this.strength;
       this.sx = (p.x * 0.5 + 0.5) * cv.width; this.sy = (0.5 - p.y * 0.5) * cv.height;
     }
+    if (!Number.isFinite(target) || !Number.isFinite(this.sx) || !Number.isFinite(this.sy)) target = 0;   // a bad frame (camera mid-teleport) must not poison the eased value
+    if (!Number.isFinite(this.shown)) this.shown = 0;
     this.shown += (target - this.shown) * 0.2;
     g.clearRect(0, 0, cv.width, cv.height);
     const I = this.shown;

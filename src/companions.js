@@ -19,6 +19,8 @@ const REACT = { jab: ['hitHead', 'hitSide'], cross: ['hitSide', 'hitKidney'], co
 const BOUT = ['jab', 'cross', 'combo', 'hook'];
 // what the friends say, by what is happening (the speech bubble picks from these)
 const LINES = {
+  thirst: ['You\'re looking dry. Drink something.', 'When did you last drink? Have some water.', 'Your lips are cracked. Water, now.'],
+  sick: ['That water got you, didn\'t it. Sip slowly.', 'Told you to filter it. Drink what you can keep down.'],
   hello: ['Alright, Rawah. Let\'s see what you\'ve got.', 'Smell that? Pine and cold air. Perfect.', 'Car\'s locked. Let\'s go.'],
   lake: ['Oh wow. {place}.', 'There it is: {place}. Worth every step.', '{place}! The water is so clear I can see the rocks.', 'I could sit by {place} all day.'],
   summit: ['We\'re on top of {place}! Look at that.', '{place}. You can see all the way into Wyoming.', 'Summit! Nothing higher around here but the clouds.'],

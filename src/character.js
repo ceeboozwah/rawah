@@ -214,6 +214,17 @@ export class Character {
 
   setTool(kind) { this.tool = kind; this.#mountTool(); }
 
+  /** Put any object in the right hand (a canteen, say), held the way a tool is; null empties the hand. Hidden in first person. */
+  setItem(obj) {
+    if (this.itemObj === obj) return;
+    if (this.itemObj) { this.hand?.remove(this.itemObj); this.itemObj = null; }
+    if (!obj || !this.hand || !this.grip) return;
+    obj.quaternion.copy(this.grip.q); obj.position.copy(this.grip.pos); obj.scale.setScalar(this.grip.scale);
+    obj.visible = !this.firstPerson;
+    this.hand.add(obj);
+    this.itemObj = obj;
+  }
+
   /** A clip fitted to this skeleton, made once. */
   #clip(name) {
     const src = this.lib.get(name);
@@ -228,6 +239,7 @@ export class Character {
     this.firstPerson = on;
     this.fallback?.setFirstPerson(on);
     if (this.toolObj) this.toolObj.visible = !on;
+    if (this.itemObj) this.itemObj.visible = !on;
     // the hand tool's materials are shared with the one hanging off the camera (props.js): leave them alone
     const tool = new Set();
     this.toolObj?.traverse((o) => tool.add(o));

@@ -26,6 +26,7 @@
 
   <div id="frost"></div>
   <div id="hurt"></div>
+  <div id="thirst"></div>
 
   <!-- ============================================================ HUD -->
   <div id="hud" class="hidden">
@@ -49,6 +50,8 @@
     <div id="bars">
       <div class="bar" id="bar-stamina"><label>Stamina</label><b><i></i></b></div>
       <div class="bar" id="bar-warmth"><label>Warmth</label><b><i></i></b></div>
+      <div class="bar" id="bar-water"><label>Water</label><b><i></i></b></div>
+      <div id="canteen-chip" class="hidden"></div>
       <div class="bar hidden" id="bar-grip"><label>Grip</label><b><i></i></b></div>
     </div>
 
@@ -202,6 +205,7 @@
           <label class="row"><span>Time of day</span><select id="set-hour"><option value="">Jump to…</option><option value="5.7">Dawn</option><option value="9">Morning</option><option value="12.9">Midday</option><option value="16.5">Afternoon</option><option value="19.2">Dusk</option><option value="22.2">Night</option><option value="1">Deep night</option></select></label>
           <label class="row"><span>Tent</span><select id="set-tent"><option value="solo">Backpacking tent</option><option value="family">Family tent · sleeps 6</option></select></label>
           <label class="row"><span>Moon</span><select id="set-moon"><option value="new">New moon (darkest)</option><option value="quarter">Quarter moon</option><option value="full">Full moon</option></select></label>
+          <label class="row"><span>Thirst pace</span><input type="range" id="set-hydro" min="1" max="8" step="1" /><b class="val" id="val-hydro"></b></label>
           <label class="row"><span>Time speed</span><input type="range" id="set-time" min="0.5" max="6" step="0.5" /><b class="val" id="val-time"></b></label>
           <h4>Display</h4>
           <label class="row"><span>Quality</span><select id="set-quality"><option value="auto">Auto</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low · phones</option></select></label>

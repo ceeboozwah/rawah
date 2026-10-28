@@ -23,7 +23,7 @@ const SAY = {
   hello: 'the crew sets out on the trail', lake: (v) => `the crew reaches ${v.place || 'a lake'}`, summit: (v) => `the crew tops out on ${v.place || 'a summit'}`,
   storm: 'thunder starts rolling in', rain: 'rain starts', snow: 'it starts to snow', fog: 'fog rolls in', cold: 'the hiker is shivering',
   dusk: 'the light is going', night: 'night falls', fire: 'the hiker lights a campfire', camp: 'the hiker pitches the tent',
-  smore: 'marshmallows go over the fire', fish: 'the hiker catches a fish', travel: 'the crew arrives somewhere new', race: 'a race breaks out',
+  smore: 'marshmallows go over the fire', thirst: 'the hiker is badly dehydrated', sick: 'the hiker drank bad water and is sick', fish: 'the hiker catches a fish', travel: 'the crew arrives somewhere new', race: 'a race breaks out',
 };
 
 // ------------------------------------------------------------------ a model, or not
