@@ -563,3 +563,12 @@ body.inv-open .slot:not(.empty) { cursor: grab; }
 .inv-help { margin: 0; font: 400 var(--t-xs) var(--sans); color: var(--faint); line-height: 1.4; }
 .slot .ic { margin-bottom: 7px; }
 .slot .ct { right: 0; left: 0; text-align: center; bottom: 3px; }
+
+#hotbar { gap: 5px; padding: 5px; border-radius: 14px; bottom: 14px; }
+#hotbar .slot { width: 46px; height: 46px; border-radius: 10px; }
+#hotbar .slot .ic svg, #hotbar .slot .ic img { width: 28px; height: 28px; }
+#hotbar .slot .num { top: 2px; left: 6px; }
+#hotbar-name { bottom: 74px; }
+#hint { bottom: 80px; }
+.slot .ic img { width: 38px; height: 38px; object-fit: contain; filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.5)); -webkit-user-drag: none; }
+@media (max-width: 520px) { #hotbar .slot { width: 42px; height: 42px; } }

@@ -139,7 +139,8 @@ export class InventoryUI {
     for (const el of [...this.grid.children, ...this.bar.children]) {
       const k = el.dataset.k, i = +el.dataset.i, id = this.#idAt(k, i);
       const ic = el.querySelector('.ic'), ct = el.querySelector('.ct');
-      if ((ic.dataset.id || '') !== (id || '')) { ic.innerHTML = id ? ITEMS[id].icon : ''; ic.dataset.id = id || ''; }
+      const art = id ? (ITEMS[id].img ? `<img src="${ITEMS[id].img}" alt="" draggable="false">` : ITEMS[id].icon) : '';
+      if (ic.dataset.id !== (id ? id + (ITEMS[id].img ? '+' : '') : '')) { ic.innerHTML = art; ic.dataset.id = id ? id + (ITEMS[id].img ? '+' : '') : ''; }
       const stack = k === 'p' && inv.pack[i] && inv.pack[i].n > 1 ? `×${inv.pack[i].n}` : '';
       ct.textContent = stack || (id ? this.hooks.badge(id) : '');
       el.classList.toggle('empty', !id);
@@ -199,7 +200,7 @@ export class InventoryUI {
       d.moved = true;
       d.ghost = document.createElement('div');
       d.ghost.className = 'slot ghost';
-      d.ghost.innerHTML = `<div class="ic">${ITEMS[this.#idAt(d.k, d.i)].icon}</div>`;
+      { const it = ITEMS[this.#idAt(d.k, d.i)]; d.ghost.innerHTML = `<div class="ic">${it.img ? `<img src="${it.img}" alt="" draggable="false">` : it.icon}</div>`; }
       document.body.appendChild(d.ghost);
     }
     if (d.ghost) { d.ghost.style.left = `${e.clientX}px`; d.ghost.style.top = `${e.clientY}px`; }

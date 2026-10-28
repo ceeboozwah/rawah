@@ -36,8 +36,10 @@ import { gustAt, WIND_DIR } from './wind.js';
 import { CrewTalk } from './crewtalk.js';
 import { Intro } from './intro.js';
 import { Hydration, relativeHumidity, heatIndexC, heatCategory, BODY_KG } from './hydration.js';
-import { Gear } from './gear.js';
+import { Gear, buildCanteen, buildBladder, buildPot, buildStraw, buildFilter } from './gear.js';
 import { Inventory, InventoryUI, ITEMS } from './inventory.js';
+import { renderIcons } from './icons.js';
+import { buildTool } from './tools.js';
 import { kindOf } from './water.js';
 import { PRESETS, resolveQuality, isTouch, SCALE } from './quality.js';
 import { setRangeK } from './cdlod.js';
@@ -810,6 +812,7 @@ function waterUse() {
   const c = gear.cur, say = (why) => { if (why && why !== 'busy') hud.toast(why, 'warn'); return !why || why === 'busy'; };
   const wt = waterAhead(), k = kindOf(c);
   if (wt && c.water < c.cap - 0.02 && !(c.water > 0.02 && k === 'raw' && c.water >= c.cap - 0.2)) return say(gear.fill(wt)) || true;
+  if (gear.sel !== 'pot' && gear.pot.water > 0.02 && c.water < c.cap - 0.02 && (k !== 'raw' || c.water < 0.02) && !wt) return say(gear.pour()) || true;
   if (k === 'raw') return say(gear.treat()) || true;
   if (gear.filter.clog >= 0.45 && !wt && gear.method === 'pump') return say(gear.scrub()) || true;
   return false;
@@ -858,7 +861,9 @@ function hydrationStep(dt, live, p) {
   else if (gear.sel === 'straw') waterHint = hintWater ? '[Y] drink through the LifeStraw' : '';
   else if (hintWater && c.water < c.cap - 0.02) waterHint = `[U] fill the ${nm}`;
   else if (k === 'raw' && hiker.mode === 'walk') waterHint = `[U] ${how} the water${c.turb > 0.3 ? ' (it is silty)' : ''}  ·  [Y] drink`;
-  else if (hydration.pct >= 0.9 && c.water > 0.02) waterHint = '[Y] drink';
+  else if (gear.sel !== 'pot' && gear.pot.water > 0.02 && c.water < c.cap - 0.02 && k !== 'raw') waterHint = `[U] pour the pot into the ${nm}`;
+  else if (gear.sel === 'pot' && c.water > 0.02 && k === 'treated') waterHint = 'Select your canteen to pour it in';
+  else if (gear.sel !== 'pot' && hydration.pct >= 0.9 && c.water > 0.02) waterHint = '[Y] drink';
   else waterHint = '';
 }
 
@@ -1545,6 +1550,15 @@ const invUI = new InventoryUI(inventory, {
   badge: (id) => { const c = { canteen: gear.canteen, bladder: gear.bladder, pot: gear.pot }[id]; return c ? `${c.water.toFixed(1)}L` : ''; },
   changed: () => { applySelection(false); save(); },
 });
+{   // the icons are the game's own models, drawn once
+  const ic = renderIcons({
+    axe: { obj: buildTool('axe'), spin: -0.75, pitch: 0, yaw: 0.5 }, machete: { obj: buildTool('machete'), spin: -0.75, pitch: 0, yaw: 0.3 }, fireworks: { obj: buildTool('fireworks'), spin: -0.25, pitch: 0.25 },
+    canteen: { obj: buildCanteen(), pitch: 0.12, yaw: 0.0 }, bladder: { obj: buildBladder(), pitch: 1.0, yaw: 0.3 }, pot: { obj: buildPot(), pitch: 0.55, yaw: 0.6 },
+    straw: { obj: buildStraw(), pitch: 0, yaw: 0, spin: 0.7 }, pump: { obj: buildFilter(), pitch: 0.2, yaw: 0.6 },
+  });
+  for (const [id, url] of Object.entries(ic)) ITEMS[id].img = url;
+  invUI.render();
+}
 /** What the selected quick slot means: a tool in the hand, or a bottle, pot or treatment [U] and [Y] work with. */
 function applySelection(announce = true) {
   const id = inventory.id, it = id && ITEMS[id];

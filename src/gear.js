@@ -278,7 +278,7 @@ export class Gear {
     this.sel = k;
     if (k === 'pot') this.method = 'boil';
     else if (this.method === 'boil') this.method = 'pump';
-    return k === 'straw' ? 'LifeStraw: face the water and press [Y] to drink from it.' : k === 'bladder' ? 'Bladder (2 L): [U] fill it at the water, [Y] drink.' : k === 'pot' ? 'Cooking pot: [U] fill it at the water, carry it to a lit fire and [U] again to boil.' : 'Canteen: [U] fill it at the water, [Y] drink.';
+    return k === 'straw' ? 'LifeStraw: face the water and press [Y] to drink from it.' : k === 'bladder' ? 'Bladder (2 L): [U] fill it at the water, [Y] drink.' : k === 'pot' ? 'Cooking pot: [U] fill it at the water, carry it to a lit fire and [U] again to boil, then select your canteen and [U] to pour it in.' : 'Canteen: [U] fill it at the water, [Y] drink.';
   }
 
   setMethod(m) { if (!this.act) this.method = m; }
@@ -334,6 +334,7 @@ export class Gear {
       this.act = { kind: 'straw', t: 0, dur: 2.4, took: false, target };
       return null;
     }
+    if (this.sel === 'pot') return 'Pour it into your canteen to drink: select the canteen and press [U].';
     const c = this.cur;
     if (c.water <= 0.005) return `Your ${this.name} is empty. Fill it at a stream or a lake.`;
     if (c.hot > 0) return 'It is still too hot to drink. Give it a few minutes.';
@@ -359,6 +360,18 @@ export class Gear {
     if (this.method === 'boil') return this.#boil(c);
     if (this.method === 'iodine') return this.#iodine(c);
     return this.#pump(c);
+  }
+
+  /** [U] with the canteen or bladder selected and water in the pot: pour the pot into it. */
+  pour() {
+    if (this.act) return 'busy';
+    const to = this.cur, from = this.pot;
+    if (to === from) return 'Select your canteen or bladder to pour into.';
+    if (from.water < 0.02) return 'The pot is empty.';
+    if (from.hot > 0) return 'The pot is still too hot to pour. Give it a few minutes.';
+    if (to.water >= to.cap - 0.02) return `The ${this.name} is full.`;
+    this.act = { kind: 'pour', t: 0, dur: 2.6, from, to, amount: Math.min(from.water, to.cap - to.water), done: 0, set: false };
+    return null;
   }
 
   #pump(c) {
@@ -441,6 +454,7 @@ export class Gear {
     else if (a.kind === 'fill') this.#fill(dt, a, ctx);
     else if (a.kind === 'pump') this.#pumpStep(dt, a, ctx);
     else if (a.kind === 'boil') this.#boilStep(dt, a, ctx);
+    else if (a.kind === 'pour') this.#pourStep(dt, a, ctx);
     else if (a.kind === 'scrub') this.#scrub(dt, a, ctx);
     return this.events;
   }
@@ -675,6 +689,51 @@ export class Gear {
         this.emit({ type: 'sound', name: 'ready' });
         this.act = null; this.#hide();
       }
+    }
+  }
+
+  // two containers side by side on dry ground; the pot tips over the other and the water runs across, its hazards mixing by volume
+  #pourStep(dt, a, ctx) {
+    const { from, to } = a;
+    if (!a.set) {
+      a.set = true; this.#setStation(ctx, a);
+      this.#useModel(to);
+      this.potModel.visible = false; this.groundPot.visible = true;
+      const y = (x, z) => this.#ground(x, z);
+      const px = a.bx + a.rx * 0.16, pz = a.bz + a.rz * 0.16, tx = a.bx - a.rx * 0.16, tz = a.bz - a.rz * 0.16;
+      a.pp = [px, pz]; a.tp = [tx, tz];
+      this.groundPot.scale.setScalar(PROP); this.gm.scale.setScalar(PROP);
+      this.gm.position.set(tx, y(tx, tz) + this.gm.userData.lift * PROP, tz); this.gm.rotation.set(0, Math.atan2(a.fx, a.fz), 0);
+      this.pourFrom0 = from.water;
+      this.emit({ type: 'sound', name: 'lid' });
+      a.base = { to: { w: to.water, h: { ...effective(to) }, t: to.turb, treated: to.treated || to.water < 0.02 }, from: { h: { ...effective(from) }, t: from.turb, treated: from.treated } };
+      to.iod = null;
+    }
+    ctx.hiker.emote = 'Crouch Idle 01';
+    this.#itemInHand(false);
+    this.station.visible = true;
+    this.filterObj.visible = false; this.cup.visible = false; this.strainer.visible = false;
+    const k = Math.min(1, a.t / a.dur), tip = Math.sin(Math.min(1, k * 1.15) * Math.PI) * 1.1;
+    const y = this.#ground(a.pp[0], a.pp[1]);
+    this.groundPot.position.set(a.pp[0] + a.rx * 0.0, y + 0.0 + 0.06 * tip, a.pp[1] + a.rz * 0.0);
+    this.groundPot.rotation.set(0, Math.atan2(a.fx, a.fz), 0);
+    this.groundPot.rotateZ(tip * 0.9);
+    const part = smooth(0.2, 0.85, k), amt = a.amount * part, d = amt - a.done;
+    if (d > 0) {
+      a.done = amt;
+      from.water = Math.max(0, from.water - d);
+      const B = a.base, tot = B.to.w + amt;
+      for (const key of ['g', 'c', 'b', 'v']) to.haz[key] = (B.to.h[key] * B.to.w + B.from.h[key] * amt) / tot;
+      to.turb = (B.to.t * B.to.w + B.from.t * amt) / tot;
+      to.water = tot;
+    }
+    if (a.t >= a.dur) {
+      const B = a.base;
+      to.treated = B.to.treated && B.from.treated; to.how = to.treated ? from.how || to.how : '';
+      to.hot = 0;
+      this.emit({ type: 'toast', text: `Poured ${a.amount.toFixed(2)} L into the ${this.name}${to.treated ? '' : '. Part of it is untreated, so all of it is'}.`, warn: !to.treated });
+      this.emit({ type: 'sound', name: 'pour' });
+      this.act = null; this.#hide();
     }
   }
 
