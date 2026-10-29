@@ -163,22 +163,23 @@
           <div class="field-label">Where</div>
           <div id="chips-place" class="chips" role="group" aria-label="Where"></div>
         </div>
+        <div class="trip-row friends-row">
+          <div class="field-label">Friends</div>
+          <div class="friends">
+            <div class="chips" role="group" aria-label="Play with friends">
+              <button id="btn-host" class="chip">Host a game</button>
+              <input id="join-code" type="text" maxlength="6" placeholder="CODE" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Friend's game code">
+              <button id="btn-join" class="chip">Join</button>
+            </div>
+            <p class="join-note">Pick your hiker first. Host a game and share the code, or enter a friend's. Allow the microphone to talk.</p>
+          </div>
+        </div>
       </div>
 
       <div class="actions">
         <button id="btn-continue" class="primary hidden">Continue</button>
         <button id="btn-start" class="primary">Start hiking</button>
         <button id="btn-controls" class="ghost">Controls</button>
-      </div>
-      <div class="join">
-        <div class="field-label">Play with friends</div>
-        <div class="join-row">
-          <button id="btn-host">Host a game</button>
-          <span class="join-or">or join</span>
-          <input id="join-code" type="text" maxlength="6" placeholder="CODE" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Game code">
-          <button id="btn-join">Join</button>
-        </div>
-        <p class="join-note">Pick your hiker above, then host a game and share the code, or enter a friend's code to join them in the valley. Allow the microphone when your browser asks so you can talk.</p>
       </div>
       <div class="credit">USGS 3DEP lidar · Copernicus Sentinel-2 · © OpenStreetMap contributors via Overture Maps</div>
     </div>
