@@ -377,7 +377,7 @@ export class Flora {
         } else if (r1 < pa + pf + ps) kind = 'snag';
         else if (r1 < pa + pf + ps + pk) kind = 'krumm';
         else if (r1 > 1 - (cv.snag * 0.1 + forest * 0.025)) kind = 'log';
-        else if (cv.meadow > 0.4 && grade < 0.25 && e < 3500 && r1 > 1 - (0.025 + 0.16 * smoothstepFine(cv.fine))) kind = 'willow';   // willow thickets in the meadows, thicker in patches
+        else if (!this.noWillow && cv.meadow > 0.4 && grade < 0.25 && e < 3500 && r1 > 1 - (0.025 + 0.16 * smoothstepFine(cv.fine))) kind = 'willow';   // willow thickets in the meadows, thicker in patches
         else if (r1 > 1 - (cv.rock * 0.06 + cv.alpine * 0.006)) kind = 'boulder';
         const rock = cv.rock, tl = cv.treeline, fine = cv.fine;
         if (kind === 'boulder') {

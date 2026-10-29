@@ -162,11 +162,59 @@ class PressMap {
   }
 }
 
+// The three layers drawn by this class: the grass clumps, the wildflowers (patches of one or two kinds) and the shrubs (willow
+// thickets where it is wet, understory shrubs at forest edges and in burns, dwarf shrubs on the tundra and the forest floor).
+// Each picks a category of the cut-out pack (vegetation.json) and a plant in it, sized in metres from the pack's real sizes.
+const LAYERS = {
+  grass: {
+    grow: '(1.0 - cov.a) * (1.0 - mask) * (1.0 - cov.r * 0.8) * (1.0 - cov.g * 0.25)',
+    place: `
+      float cat = alpine > 0.5 ? 0.0 : (vLush > 0.55 && h2 > 0.4) ? 3.0 : (h3 > 0.55 ? 2.0 : 1.0);
+      float pr = fract(h1 * 7.31 + h2 * 3.7);
+      float sz = (0.88 + h3 * 0.3) * mix(1.0, 0.85, alpine);
+      float dens = 1.0;`,
+    wind: '1.0', near: '1.0', press: true,
+  },
+  forbs: {
+    grow: '(1.0 - cov.a) * (1.0 - mask) * (1.0 - cov.r * 0.85)',
+    place: `
+      vec2 pc = floor(root / 11.0);
+      float ph = ihash(ivec2(pc)), pid = ihash(ivec2(pc) + ivec2(31, 57));
+      vec2 pf = fract(root / 11.0) - 0.5;
+      float edge = 1.0 - smoothstep(0.22, 0.52, length(pf) + (h3 - 0.5) * 0.3);
+      float season = 1.0 - 0.75 * smoothstep(0.6, 0.95, uCure);
+      float dens = smoothstep(0.34, 0.62, ph) * edge * season * 0.62 * (1.0 - smoothstep(3900.0, 4100.0, y0));
+      float cat = alpine > 0.5 ? 0.0 : (vLush > 0.5 || bx.r > 0.4) ? 1.0 : (pid > 0.62 ? 2.0 : (pid < 0.25 ? 0.0 : 1.0));
+      float pr = h2 > 0.8 ? ihash(ivec2(pc) + ivec2(99, 5)) : pid;
+      float sz = 0.85 + h3 * 0.35;`,
+    wind: '0.55', near: '0.6', press: true,
+  },
+  shrubs: {
+    grow: '(1.0 - cov.a) * (1.0 - mask)',
+    place: `
+      float moist = clamp(vLush * 1.2 + bx.r * 0.6, 0.0, 1.0);
+      float wet = smoothstep(0.5, 0.8, moist) * (1.0 - alpine);
+      float zone = ihash(ivec2(floor(root / 24.0)) + ivec2(7, 13));
+      float dW = wet * smoothstep(0.3, 0.6, zone) * 0.95;
+      float dU = (0.05 + 0.5 * cov.g + 0.1 * (1.0 - cov.r)) * (1.0 - alpine) * smoothstep(2500.0, 2750.0, y0) * (1.0 - wet);
+      float dD = (0.08 + 0.3 * cov.r + 0.45 * alpine) * (1.0 - wet * 0.8);
+      float tot = dW + dU + dD, pick = h2 * tot;
+      float cat = pick < dW ? 2.0 : (pick < dW + dU ? 1.0 : 0.0);
+      float pr = fract(h1 * 5.17 + h3 * 2.3);
+      float sz = 0.85 + h3 * 0.35;
+      float dens = min(1.0, tot) * (1.0 - cov.r * 0.15);`,
+    wind: '0.16', near: '0.0', press: false,
+  },
+};
+
 const BLOCKS = 6;   // the clump grid is drawn as BLOCKS x BLOCKS pieces so the ones off screen can be skipped
 
 export class Grass {
-  constructor(terrain, { radius = 30, spacing = 0.5 } = {}, uniforms) {
+  constructor(terrain, { radius = 30, spacing = 0.5, layer = 'grass', veg = null, shared = null } = {}, uniforms) {
     this.terrain = terrain;
+    this.layer = layer;
+    const L = LAYERS[layer];
+    this.painted = !veg;
     this.spacing = spacing;
     this.W = Math.round((radius * 2) / spacing);
     this.uniforms = {
@@ -175,13 +223,19 @@ export class Grass {
       uSpacing: { value: spacing }, uW: { value: this.W }, uRadius: { value: radius },
       uTrA: atmosphere.uTrA, uTrB: atmosphere.uTrB,   // the shared ring of pressings (atmosphere.js)
       uRing: { value: new THREE.Vector2(radius * RING_A, radius * RING_B) },
-      uPressC: { value: new THREE.Vector2() }, uPressS: { value: PRESS_SIZE },
+      uPressC: shared ? shared.uniforms.uPressC : { value: new THREE.Vector2() }, uPressS: { value: PRESS_SIZE },
       uFrost: { value: 0 }, uCure: { value: 0.75 }, uTime: uniforms.uTime, uCalm: uniforms.uCalm,
-      uClearA: { value: Array.from({ length: 6 }, () => new THREE.Vector4(1e6, 1e6, 1e6, 1e6)) }, uClearR: { value: new Array(6).fill(1) },   // strips of ground kept bare: a to b, radius (the fire, the tent, a felled tree)
+      uClearA: shared ? shared.uniforms.uClearA : { value: Array.from({ length: 6 }, () => new THREE.Vector4(1e6, 1e6, 1e6, 1e6)) }, uClearR: shared ? shared.uniforms.uClearR : { value: new Array(6).fill(1) },   // strips of ground kept bare: a to b, radius (the fire, the tent, a felled tree)
     };
-    this.press = new PressMap(this.uniforms);
+    this.press = shared ? shared.press : new PressMap(this.uniforms);
+    if (veg) {
+      const pl = veg.meta.plants, tab = Array.from({ length: 64 }, (_, i) => (pl[i] ? new THREE.Vector4(pl[i].x, pl[i].y, pl[i].cardW, pl[i].cardH) : new THREE.Vector4()));
+      const cats = Array.from({ length: 4 }, (_, i) => { const c = Object.values(veg.meta.cats)[i] || [0, 0]; return new THREE.Vector4(c[0], c[1], 0, 0); });
+      Object.assign(this.uniforms, { uPlants: { value: tab }, uCats: { value: cats }, uAtlas: { value: new THREE.Vector2(veg.meta.cols, veg.meta.rows) } });
+      this.pad0 = Math.max(2.2, ...pl.map((p) => p.cardW)) * (layer === 'grass' ? 1.4 : 1.1);
+    }
     const clumps = { 3: clumpGeometry(3), 2: clumpGeometry(2) };
-    const mat = new THREE.MeshLambertMaterial({ map: paintGrass(), alphaTest: 0.42, alphaToCoverage: true, side: THREE.DoubleSide });
+    const mat = new THREE.MeshLambertMaterial({ map: veg ? veg.tex : paintGrass(), alphaTest: 0.42, alphaToCoverage: true, side: THREE.DoubleSide });
     mat.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, this.uniforms);
       shader.uniforms.uColorMap = { value: terrain.colorMap };
@@ -206,6 +260,7 @@ export class Grass {
           uniform float uClearR[6];
           varying vec3 vSat, vTone;
           varying float vLush;
+          ${veg ? 'uniform vec4 uPlants[64]; uniform vec4 uCats[4]; uniform vec2 uAtlas; uniform float uCure; varying float vT, vR, vK;' : ''}
           ${HEIGHT_GLSL}
           ${WIND_GLSL}`)
         .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = vec3(0.0, 1.0, 0.0);')
@@ -237,7 +292,7 @@ export class Grass {
           if (fade * lodW < 0.01) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
           vec4 cov = texture2D(uCover, root / uExtent + 0.5);   // live, burned, aspen, rock
           float mask = maskAt(root);
-          float grow = (1.0 - cov.a) * (1.0 - mask) * (1.0 - cov.r * 0.8) * (1.0 - cov.g * 0.25);
+          float grow = ${L.grow};
           if (step(h1 * 0.8 + h3 * 0.2, grow * 2.0) < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }   // the height below can only lower this
           float y0 = groundH(root, 0.0);
           grow *= smoothstep(3960.0, 3700.0, y0);
@@ -256,11 +311,25 @@ export class Grass {
             float ct = clamp(dot(root - ca, cab) / max(dot(cab, cab), 1e-4), 0.0, 1.0);
             live *= smoothstep(uClearR[ci] * 0.75, uClearR[ci], distance(root, ca + cab * ct));
           }
+          ${veg ? `
+          ${L.place}
+          float h4 = ihash(cell * 5 + ivec2(3, 11));
+          if (h4 > dens) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+          float size = sz * fade * lodW * live * (1.0 - 0.5 * smoothstep(0.3, 1.1, buried));
+          if (size < 0.004) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+          vec4 cc = uCats[int(cat)];
+          int pi = int(cc.x) + min(int(floor(pr * cc.y)), max(int(cc.y) - 1, 0));
+          vec4 pl = uPlants[pi];
+          float cardW = pl.z, cardH = pl.w;
+          vMapUv = vec2((pl.x + uv.x) / uAtlas.x, 1.0 - (pl.y + 1.0 - uv.y) / uAtlas.y);
+          vT = uv.y; vR = h1; vK = cat;
+          float wk = min(cardH, 1.5) * ${L.wind}, nk = cardH * ${L.near};` : `
           float size = mix(1.0, 0.6, alpine) * (0.75 + h3 * 0.6) * fade * lodW * live * (1.0 - 0.5 * smoothstep(0.3, 1.1, buried));
           if (size < 0.004) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
           // which clump: turf up high, sedge where it's green and wet, meadow grass elsewhere
           float kind = alpine > 0.5 ? 2.0 : vLush > 0.55 && h2 > 0.4 ? 3.0 : step(0.55, h3);
           vMapUv = vec2((kind + uv.x) / 4.0, uv.y);
+          float cardW = 1.6, cardH = mix(0.72, 0.42, alpine), wk = 1.0, nk = 1.0;`}
           float cv = float(gl_VertexID / 4) * 0.5 - 0.5;   // each card leans a little differently, never one flat sprite
           float ang = h2 * 6.2832 + cv * (h1 - 0.5) * 0.7, ca = cos(ang), sa = sin(ang);
           vec3 lp = vec3(position.x * ca - position.z * sa, position.y, position.x * sa + position.z * ca);
@@ -269,30 +338,55 @@ export class Grass {
           vec4 pm = texture2D(uPress, (root - uPressC) / uPressS + 0.5);
           // the boxel's ~30 m wear blob reads as a walked path only at range; near, only real prints press
           float press = max(pm.a, bx.g * 0.7 * smoothstep(50.0, 140.0, r));
+          ${L.press ? '' : 'press = 0.0;'}
           vec2 lean = (pm.gb - 0.5) * 4.0;
-          vec3 p = vec3(root.x + lp.x * size * wm * 1.6, y0 - 0.03 + t * size * mix(0.72, 0.42, alpine) * (1.0 - press * 0.8), root.y + lp.z * size * wm * 1.6);
+          vec3 p = vec3(root.x + lp.x * cardW * size * wm, y0 - 0.03 + t * cardH * size * (1.0 - press * 0.8), root.y + lp.z * cardW * size * wm);
           // wind: steady lean downwind plus the travelling gusts; bend grows with height squared.
           // and even when the air is still the blades are not frozen: a small shimmer rides under the gusts
           float g = gustAt(root);
           float flut = sin(uTime * 3.7 + root.x * 2.3 + root.y * 1.7) * sin(uTime * 2.9 + root.y * 3.1 - root.x * 1.3);
-          float bend = (0.1 + g * 0.8 + flut * 0.06 + sin(uTime * 2.3 + root.x * 0.4 + root.y * 0.3) * 0.07) * t * t * size;
+          float bend = (0.1 + g * 0.8 + flut * 0.06 + sin(uTime * 2.3 + root.x * 0.4 + root.y * 0.3) * 0.07) * t * t * size * wk;
           bend *= 1.0 + cv * (h2 - 0.5) * 0.9;
           vec2 wdir = WIND_DIR;
-          p.xz += wdir * bend + vec2(-wdir.y, wdir.x) * flut * 0.07 * t * t * size;
+          p.xz += wdir * bend + vec2(-wdir.y, wdir.x) * flut * 0.07 * t * t * size * wk;
           p.y -= bend * bend * 0.5;
           // part around the hiker
           vec2 away = root - uPlayer.xz;
           float near = 1.0 - smoothstep(0.2, 1.0, length(away));
-          p.xz += normalize(away + 1e-4) * near * t * size * 0.7;
-          p.y -= near * t * size * 0.3;
-          p.xz += normalize(lean + vec2(1e-4)) * press * t * size * 0.9;
+          p.xz += normalize(away + 1e-4) * near * t * size * 0.7 * nk;
+          p.y -= near * t * size * 0.3 * nk;
+          p.xz += normalize(lean + vec2(1e-4)) * press * t * size * 0.9 * nk;
           transformed = p;`);
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `#include <common>
           uniform float uFrost, uCure;
           varying vec3 vSat, vTone;
-          varying float vLush;`)
-        .replace('#include <map_fragment>', `
+          varying float vLush;
+          ${veg ? 'varying float vT, vR, vK;' : ''}`)
+        .replace('#include <map_fragment>', veg ? `
+          vec4 gs = texture2D(map, vMapUv);
+          vec3 photo = gs.rgb * 0.85;
+          float lum = dot(photo, vec3(0.3, 0.59, 0.11));
+          vec3 col; float shade;
+          ${layer === 'grass' ? `
+          float alive = step(uCure - vLush * 0.35, vR);
+          vec3 straw = vec3(0.62, 0.48, 0.26) * (lum * 1.9 + 0.05) * vTone;
+          col = mix(straw, photo, alive);
+          col *= mix(vec3(1.0), clamp(vSat * 2.0, 0.6, 1.3), 0.22);
+          shade = mix(0.55, 1.0, smoothstep(0.0, 0.42, vT));` : layer === 'forbs' ? `
+          float dry = smoothstep(0.62, 0.95, uCure) * (0.6 + 0.4 * fract(vR * 9.7));
+          vec3 straw = vec3(0.5, 0.4, 0.24) * (lum * 1.8 + 0.04);
+          col = mix(photo, straw, dry * 0.85);
+          col *= mix(vec3(1.0), clamp(vSat * 2.0, 0.6, 1.3), 0.12);
+          shade = mix(0.6, 1.0, smoothstep(0.0, 0.3, vT));` : `
+          float aut = smoothstep(0.58, 0.95, uCure) * (0.5 + 0.5 * fract(vR * 13.1));
+          vec3 tint = vK < 0.5 ? vec3(0.78, 0.22, 0.12) : vec3(0.95, 0.7, 0.18);
+          col = mix(photo, tint * (lum * 1.6 + 0.05), aut * 0.75);
+          col *= mix(vec3(1.0), clamp(vSat * 2.0, 0.6, 1.3), 0.1);
+          shade = mix(0.7, 1.0, smoothstep(0.0, 0.5, vT));`}
+          col = mix(col, vec3(0.86, 0.89, 0.93), uFrost * smoothstep(0.3, 1.0, vT) * 0.85);
+          diffuseColor.rgb = col * shade;
+          diffuseColor.a *= gs.a;` : `
           vec4 gs = texture2D(map, vMapUv);
           // gs.r brightness, gs.g when this blade cures, gs.b root to tip
           float alive = step(uCure - vLush * 0.35, gs.g);
@@ -306,7 +400,7 @@ export class Grass {
         // both faces of a card catch the sky the same way
         .replace('#include <normal_fragment_begin>', 'float faceDirection = 1.0;\nvec3 normal = normalize(vNormal);\nvec3 nonPerturbedNormal = normal;');
     };
-    mat.customProgramCacheKey = () => 'rawah-grass-clumps';
+    mat.customProgramCacheKey = () => `rawah-grass-clumps-${layer}-${veg ? 'photo' : 'painted'}`;
     this.mesh = new THREE.Group();
     this.blocks = [];
     const step = Math.ceil(this.W / BLOCKS);
@@ -392,12 +486,21 @@ export class Grass {
     this.#cull(camera);
   }
 
+  /** The extra layers (wildflowers, shrubs) follow the camera; the grass layer owns the press map and the trampling. */
+  follow(camera, hiker, frost, cure) {
+    this.uniforms.uCenter.value.set(camera.position.x, camera.position.z);
+    this.uniforms.uPlayer.value.copy(hiker.pos);
+    this.uniforms.uFrost.value = frost;
+    if (cure !== undefined) this.uniforms.uCure.value = cure;
+    this.#cull(camera);
+  }
+
   /** Draw only the pieces of the clump grid that can be seen. */
   #cull(camera) {
     const s = this.spacing, W = this.W, T = this.terrain;
     this.frustum.setFromProjectionMatrix(this._pm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
     const c0x = Math.floor(camera.position.x / s) - W / 2, c0z = Math.floor(camera.position.z / s) - W / 2;
-    const pad0 = 2.2;   // a clump leans and spreads about this far from its root
+    const pad0 = this.pad0 || 2.2;   // a clump leans and spreads about this far from its root
     let drawn = 0;
     for (const b of this.blocks) {
       const pad = pad0 * (1 + 0.6 * (b.stride - 1)) + b.stride * s;   // wider clumps further out, and the cells line up on the world grid

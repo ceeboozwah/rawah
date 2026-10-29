@@ -28,6 +28,7 @@ import { Guide } from './guide.js';
 import { TOOL_NAME } from './tools.js';
 import { clamp, smoothstep, lerp } from './noise.js';
 import { Grass } from './grass.js';
+import { loadVegetation } from './vegetation.js';
 import { Boxels } from './boxels.js';
 import { updateAtmosphere, atmosphere } from './atmosphere.js';
 import { Weather, REGIMES } from './weather.js';
@@ -225,7 +226,11 @@ const weather = new Weather();
 weather.override = REGIMES[settings.weather] ? settings.weather : null;
 const precip = new Precip(Q.precip);
 scene.add(precip.mesh);
-const grass = new Grass(terrain, Q.grass, flora.uniforms);
+const veg = await loadVegetation();     // the cut-out grasses, wildflowers and shrubs (tools/cut_vegetation.py)
+flora.noWillow = !!veg;                  // the willow thickets are the shrub layer's now
+const grass = new Grass(terrain, { ...Q.grass, veg: veg && veg.grass }, flora.uniforms);
+const forbs = veg && new Grass(terrain, { radius: Math.min(34, Q.grass.radius * 0.7), spacing: Math.max(0.8, Q.grass.spacing * 2.0), layer: 'forbs', veg: veg.forbs, shared: grass }, flora.uniforms);
+const shrubs = veg && new Grass(terrain, { radius: Q.grass.radius >= 40 ? 85 : 55, spacing: 2.6, layer: 'shrubs', veg: veg.shrubs, shared: grass }, flora.uniforms);
 const leafFall = new LeafFall(scene, world, flora);   // aspen leaves letting go in autumn
 leafFall.load();
 const horizon = new HorizonMap(world);
@@ -235,6 +240,7 @@ const fishing = new Fishing(world, scene);
 fishing.onRipple = (x, z, size) => { waves.drop(x, z, 0.2 + 0.16 * size, 0.006 + 0.012 * size); waterCells.stir(x, z, 0.008 + 0.012 * size, onStream(x, z)); if (size > 1.1) waterCells.foam(x, z, 0.06 * size); };
 const roast = new Roast(scene);
 scene.add(grass.mesh);
+if (forbs) scene.add(forbs.mesh, shrubs.mesh);
 const boxels = new Boxels(world, { n: 512 });
 BOXEL.value = boxels.texture;
 let bxLast = null, bxAcc = 0, bxRain = 0;
@@ -1908,7 +1914,9 @@ function tick(dt, draw = true) {
   precip.update(state.paused ? 0 : dt, camera, weather, [WIND_DIR[0] * wspd, WIND_DIR[1] * wspd], precipLight.copy(sky.hemi.color).multiplyScalar(0.2 + sky.light * 0.75 + weather.flash));
   const tC = tempC(h, p.y);
   grass.clear(...(world.lot ? world.lot.clear : []), camp.fire && [camp.fire.x, camp.fire.z, 1.9], camp.tent && (camp.tent.kind === 'family' ? [camp.tent.x - Math.sin(camp.tent.yaw) * 3.3, camp.tent.z - Math.cos(camp.tent.yaw) * 3.3, camp.tent.x + Math.sin(camp.tent.yaw) * 3.6, camp.tent.z + Math.cos(camp.tent.yaw) * 3.6, 2.3] : [camp.tent.x, camp.tent.z, 3.0]), ...wood.clearings(hiker.pos), ...dump.clearings(hiker.pos), ...gear.clearings());
-  grass.update(camera, hiker, clamp((1.5 - tC) / 4, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0), calendar.cure, avatar.heading, renderer);
+  const frost = clamp((1.5 - tC) / 4, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0);
+  grass.update(camera, hiker, frost, calendar.cure, avatar.heading, renderer);
+  if (forbs) { forbs.follow(camera, hiker, frost, calendar.cure); shrubs.follow(camera, hiker, frost, calendar.cure); }
   // the ground remembers: footsteps wear it, rain wets it, sun dries it —
   // every event's certified cone decides which cells the sim may skip
   if (live) {
@@ -2008,7 +2016,7 @@ function tick(dt, draw = true) {
   perf.frame++;
   renderer.shadowMap.needsUpdate = settings.shadows && (perf.frame % 2 === 0 || !!state.travel || !!state.intro);
   if (draw) {
-    mirror.update({ scene, camera, hide: [lakes.group, streams.group, grass.mesh, shafts.mesh, leafFall.meshes[0], leafFall.meshes[1], leafFall.meshes[2], leafFall.meshes[3]], atmosphere: (cam) => updateAtmosphere(sky, cam), enabled: settings.mirror && QUALITY !== 'low' && !Q.logDepth });
+    mirror.update({ scene, camera, hide: [lakes.group, streams.group, grass.mesh, ...(forbs ? [forbs.mesh, shrubs.mesh] : []), shafts.mesh, leafFall.meshes[0], leafFall.meshes[1], leafFall.meshes[2], leafFall.meshes[3]], atmosphere: (cam) => updateAtmosphere(sky, cam), enabled: settings.mirror && QUALITY !== 'low' && !Q.logDepth });
     renderer.render(scene, camera);
   }
 }
@@ -2054,7 +2062,7 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, fields, hydration, gear, inventory, invUI, smokeCol, flare,
+    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, fields, hydration, gear, inventory, forbs, shrubs, invUI, smokeCol, flare,
     benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, hiker, rig, avatar, party, route, gmap: map, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },
