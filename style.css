@@ -632,3 +632,32 @@ body.ed-locked .ed-panel, body.ed-locked .ed-bar { opacity: 0.55; pointer-events
 .ed-modal-btns button { font: 600 var(--t-sm) var(--sans); padding: 8px 14px; border-radius: 10px; border: 1px solid var(--edge); background: rgba(255, 255, 255, 0.08); color: var(--ink); cursor: pointer; }
 .ed-modal-btns button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
 .ed-sec > input[type=search] { width: calc(100% - 20px) !important; }
+
+/* ---------------------------------------------------------------- playing together (src/net.js) */
+.join { margin-top: 14px; display: grid; gap: 6px; justify-items: center; }
+.join-row { display: flex; gap: 8px; align-items: center; }
+#join-code { width: 8.5em; text-align: center; text-transform: uppercase; letter-spacing: 0.22em; font: 600 var(--t-md) var(--sans); color: var(--ink); background: rgba(255, 255, 255, 0.07); border: 1px solid var(--edge-strong); border-radius: 999px; padding: 9px 14px; }
+.join-note { margin: 0; max-width: 34em; text-align: center; font: 400 var(--t-xs) var(--sans); color: var(--faint); line-height: 1.45; }
+.mp-modal { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(5, 8, 12, 0.55); }
+.mp-card { width: min(400px, 92vw); padding: 20px; border-radius: 18px; background: var(--glass-strong); display: grid; gap: 10px; }
+.mp-card h3 { margin: 0; font: 400 20px var(--display); }
+.mp-card p { margin: 0; font: 400 var(--t-sm) var(--sans); color: var(--dim); line-height: 1.45; }
+.mp-sub { font-size: var(--t-xs) !important; color: var(--faint) !important; }
+.mp-code { font: 400 38px var(--display); letter-spacing: 0.18em; text-align: center; color: var(--accent); padding: 6px 0; }
+.mp-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font: 500 var(--t-sm) var(--sans); }
+.mp-list li { padding: 6px 10px; border-radius: 9px; background: rgba(255, 255, 255, 0.05); border: 1px solid transparent; }
+.mp-list li.talk { border-color: var(--accent); }
+.mp-list li.none { color: var(--faint); }
+.mp-list small { color: var(--faint); font-weight: 500; }
+.mp-row, .mp-btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.mp-row { justify-content: flex-start; }
+.mp-card button { font: 600 var(--t-sm) var(--sans); padding: 8px 14px; border-radius: 10px; border: 1px solid var(--edge); background: rgba(255, 255, 255, 0.08); color: var(--ink); cursor: pointer; }
+.mp-card button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.mp-card button.danger { color: #ffb3a8; }
+.mp-card button.on { border-color: var(--accent); }
+.mp-card button:disabled { opacity: 0.5; cursor: default; }
+.mp-roster { position: fixed; top: 72px; right: 14px; z-index: 30; display: grid; gap: 4px; justify-items: end; font: 500 var(--t-sm) var(--sans); text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8); }
+.mp-roster span { padding: 3px 10px; border-radius: 999px; background: var(--glass); border: 1px solid var(--edge); color: var(--dim); }
+.mp-roster span.talk { border-color: var(--accent); color: var(--ink); }
+.mp-roster .mp-tag { font: 600 var(--t-xs) var(--sans); letter-spacing: 0.2em; color: var(--accent); }
+.mp-roster button { font: 600 var(--t-xs) var(--sans); padding: 4px 10px; border-radius: 999px; border: 1px solid var(--edge); background: var(--glass); color: var(--ink); cursor: pointer; pointer-events: auto; }

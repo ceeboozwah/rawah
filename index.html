@@ -170,6 +170,14 @@
         <button id="btn-start" class="primary">Start hiking</button>
         <button id="btn-controls" class="ghost">Controls</button>
       </div>
+      <div class="join">
+        <div class="field-label">Join a friend</div>
+        <div class="join-row">
+          <input id="join-code" type="text" maxlength="6" placeholder="CODE" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Game code">
+          <button id="btn-join">Join their game</button>
+        </div>
+        <p class="join-note">Pick your hiker above, enter your friend's code and join them in the valley. Allow the microphone when your browser asks so you can talk.</p>
+      </div>
       <div class="credit">USGS 3DEP lidar · Copernicus Sentinel-2 · © OpenStreetMap contributors via Overture Maps</div>
     </div>
   </div>
@@ -238,6 +246,7 @@
         <button id="btn-resume" class="primary">Resume</button>
         <button id="btn-map">Map &amp; quick travel</button>
         <button id="btn-guide">Field guide</button>
+        <button id="btn-friends">Play with friends</button>
         <button id="btn-restart" class="ghost danger">Start over</button>
       </footer>
     </div>
@@ -254,6 +263,7 @@
     </div>
   </div>
 
+  <script src="./vendor/peerjs/peerjs.min.js"></script>
   <script type="module" src="./src/main.js"></script>
 </body>
 </html>

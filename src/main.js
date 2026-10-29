@@ -42,6 +42,7 @@ import { Gear, buildCanteen, buildBladder, buildPot, buildStraw, buildFilter } f
 import { Inventory, InventoryUI, ITEMS } from './inventory.js';
 import { Placements } from './placements.js';
 import { Editor } from './editor.js';
+import { Net, normCode } from './net.js';
 import { renderIcons } from './icons.js';
 import { buildTool } from './tools.js';
 import { kindOf } from './water.js';
@@ -396,6 +397,33 @@ $('btn-continue').classList.toggle('hidden', !hasSave);
 // ------------------------------------------------------------------ input
 const input = new Input(renderer.domElement);
 const { keys, pressed } = input;
+// playing together: a shared game with a code, friends as hikers, and voice (src/net.js)
+const net = new Net({
+  scene, world, lib: avatar.lib,
+  toast: (t, k) => hud.toast(t, k),
+  me: () => ({ name: playerName[0].toUpperCase() + playerName.slice(1), character: playerName }),
+  snapshot: () => {
+    const h = hiker, a = h.action, r = (v) => Math.round(v * 100) / 100;
+    return { x: r(h.pos.x), y: r(h.pos.y), z: r(h.pos.z), vx: r(h.vel.x), vz: r(h.vel.z), yaw: r(h.yaw), pitch: r(h.pitch || 0), m: h.mode, s: h.stance, g: !!h.grounded, sl: !!h.sliding, re: !!h.resting, f: !!h.flip, cs: r(h.climbSpeed || 0), wx: r(h.wallUp?.x || 0), wy: r(h.wallUp?.y || 0), tl: h.tool, em: h.emote || '', a: a ? [a.kind, a.id] : 0 };
+  },
+  info: () => ({ time: { hour: state.hour, day: state.day, doy: calendar.doy }, weather: weather.save(), pos: { x: hiker.pos.x, z: hiker.pos.z } }),
+  timeNow: () => ({ hour: state.hour, day: state.day }),
+  onTime: (t) => { if (Math.abs((t.day * 24 + t.hour) - (state.day * 24 + state.hour)) > 0.04) { state.hour = t.hour; state.day = t.day; } },
+  onWelcome: (w, code) => {
+    if (w.time.doy !== calendar.doy) {
+      // the season is built at boot: match the host's and come back to this game
+      settings.doy = w.time.doy; storeJSON('rawah-settings', settings);
+      try { sessionStorage.setItem('rawah-join', code); sessionStorage.setItem('rawah-autostart', '1'); } catch { /* private mode */ }
+      $('loading').classList.remove('hidden'); $('load-text').textContent = 'Matching the host\'s season…';
+      location.reload();
+      return;
+    }
+    state.hour = w.time.hour; state.day = w.time.day;
+    weather.load(w.weather); weather.settle(state.day, state.hour);
+    hiker.place(w.pos.x + 2.5, w.pos.z + 2.5);
+    hud.toast('You are in your friend\'s game. Voices fade with distance.');
+  },
+});
 if (DEV) editor = new Editor({ renderer, camera, scene, world, flora, placements, keys, toast: (t, k) => hud.toast(t, k), mind });
 if (isTouch) input.enableTouch(document.body);
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.started && !state.paused) pause(true); });
@@ -593,10 +621,13 @@ function begin(fresh) {
   audio.start();
   audio.setVolume(settings.volume);
   pause(false);
+  let joinCode = null;
+  try { joinCode = sessionStorage.getItem('rawah-join'); sessionStorage.removeItem('rawah-join'); } catch { /* private mode */ }
   if (fresh) {
-    if (settings.intro && !new URLSearchParams(location.search).has('nointro') && startIntro()) return;
-    toastHello();
+    if (!joinCode && settings.intro && !new URLSearchParams(location.search).has('nointro') && startIntro()) return;
+    if (!joinCode) toastHello();
   }
+  if (joinCode) net.join(joinCode);
 }
 
 function toastHello() {
@@ -685,6 +716,19 @@ $('btn-restart').onclick = () => {
 const pick = { doy: settings.doy, hour: settings.hour, trailhead: trailhead.name, character: playerName };
 const booted = { doy: settings.doy, trailhead: trailhead.name, character: playerName };
 buildTitle({ trailheads: world.places.filter((p) => p.kind === 'trailhead'), pick, characters: CHARACTERS });
+{   // joining a friend: their code (or an invite link with ?join=CODE) and the hiker picked above
+  const input = $('join-code'), note = document.querySelector('.join-note');
+  const fromLink = new URLSearchParams(location.search).get('join');
+  if (fromLink) { input.value = normCode(fromLink); note.textContent = 'You were invited. Pick your hiker, then join.'; }
+  input.addEventListener('input', () => { input.value = normCode(input.value); });
+  $('btn-join').onclick = () => {
+    const code = normCode(input.value);
+    if (code.length !== 6) { note.textContent = 'Enter the six-character code your friend gave you.'; note.style.color = '#ffb3a8'; return; }
+    try { sessionStorage.setItem('rawah-join', code); } catch { /* private mode */ }
+    startFresh();
+  };
+}
+$('btn-friends').onclick = () => net.openPanel();
 function startFresh() {
   Object.assign(settings, { doy: pick.doy, hour: pick.hour, trailhead: pick.trailhead, character: pick.character });
   storeJSON('rawah-settings', settings);
@@ -1875,6 +1919,7 @@ function tick(dt, draw = true) {
   }
   eye.copy(camera.position);
   if (!editor?.active) placements.update(camera);
+  net.update(dt, camera);
 
   camera.updateMatrixWorld();
   terrain.update(camera);
@@ -2085,7 +2130,7 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, fields, hydration, gear, inventory, placements, get editor() { return editor; }, forbs, shrubs, invUI, smokeCol, flare,
+    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, fields, hydration, gear, inventory, placements, net, get editor() { return editor; }, forbs, shrubs, invUI, smokeCol, flare,
     benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, hiker, rig, avatar, party, route, gmap: map, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },
