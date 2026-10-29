@@ -25,6 +25,10 @@ export const normCode = (c) => String(c || '').toUpperCase().replace(/[^A-Z0-9]/
 const makeCode = () => Array.from({ length: 6 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join('');
 const idOf = (code) => `rawah-${code}`;
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+/** Where friends open the game. Hosting from a copy on your own computer still works: the guests load the public one. */
+export const PUBLIC_URL = 'https://ceeboozwah.github.io/rawah/';
+const isLocal = () => /^(localhost|127\.|\[::1\]|10\.|192\.168\.)/.test(location.hostname) || location.hostname.endsWith('.local');
+export const inviteLink = (code) => `${isLocal() ? PUBLIC_URL : `${location.origin}${location.pathname}`}?join=${code}`;
 const RATE = 0.1;                  // seconds between state packets
 const RANGE = { full: 6, none: 150 };
 
@@ -411,7 +415,7 @@ export class Net {
       if (!b) return;
       if (b.dataset.a === 'host') this.startHost();
       else if (b.dataset.a === 'leave') { this.leave(); }
-      else if (b.dataset.a === 'copy') { navigator.clipboard?.writeText(`${location.origin}${location.pathname}?join=${this.code}`).then(() => this.toast?.('Invite link copied.')).catch(() => this.toast?.(`Send your friend the code ${this.code}.`)); }
+      else if (b.dataset.a === 'copy') { navigator.clipboard?.writeText(inviteLink(this.code)).then(() => this.toast?.('Invite link copied.')).catch(() => this.toast?.(`Send your friend the code ${this.code}.`)); }
       else if (b.dataset.a === 'mic') this.setMuted(!this.muted);
       else if (b.dataset.a === 'radio') this.setRadio(!this.radio);
       else if (b.dataset.a === 'close') this.closePanel();
@@ -435,7 +439,7 @@ export class Net {
     } else {
       this.card.innerHTML = `<h3>${this.host ? 'Your shared game' : 'Joined a shared game'}</h3>
         <div class="mp-code" aria-label="Game code">${this.code}</div>
-        <p class="mp-sub">${this.host ? 'Friends join with this code, or with the invite link.' : 'You are playing with the host and their friends.'}</p>
+        <p class="mp-sub">${this.host ? `Friends open ${inviteLink('').replace('?join=', '')} and enter this code, or use the invite link.` : 'You are playing with the host and their friends.'}</p>
         <ul class="mp-list"><li class="me"><b>${me.name}</b> <small>you</small></li>${this.players.map((r) => `<li class="${r.speaking ? 'talk' : ''}"><b>${r.name}</b>${r.speaking ? ' <small>talking</small>' : ''}</li>`).join('') || '<li class="none">Waiting for friends…</li>'}</ul>
         <div class="mp-row"><button data-a="mic" ${this.micOn ? '' : 'disabled'}>${this.micOn ? (this.muted ? 'Unmute mic' : 'Mute mic') : 'No mic'}</button><button data-a="radio" class="${this.radio ? 'on' : ''}">${this.radio ? 'Radio: everyone, full volume' : 'Voices fade with distance'}</button></div>
         <p class="mp-sub">${mic}</p>

@@ -621,13 +621,14 @@ function begin(fresh) {
   audio.start();
   audio.setVolume(settings.volume);
   pause(false);
-  let joinCode = null;
-  try { joinCode = sessionStorage.getItem('rawah-join'); sessionStorage.removeItem('rawah-join'); } catch { /* private mode */ }
+  let joinCode = null, hostNow = false;
+  try { joinCode = sessionStorage.getItem('rawah-join'); hostNow = !!sessionStorage.getItem('rawah-host'); sessionStorage.removeItem('rawah-join'); sessionStorage.removeItem('rawah-host'); } catch { /* private mode */ }
   if (fresh) {
-    if (!joinCode && settings.intro && !new URLSearchParams(location.search).has('nointro') && startIntro()) return;
-    if (!joinCode) toastHello();
+    if (!joinCode && !hostNow && settings.intro && !new URLSearchParams(location.search).has('nointro') && startIntro()) return;
+    if (!joinCode && !hostNow) toastHello();
   }
   if (joinCode) net.join(joinCode);
+  else if (hostNow) net.startHost().then((c) => { if (c) net.openPanel(); });
 }
 
 function toastHello() {
@@ -721,6 +722,10 @@ buildTitle({ trailheads: world.places.filter((p) => p.kind === 'trailhead'), pic
   const fromLink = new URLSearchParams(location.search).get('join');
   if (fromLink) { input.value = normCode(fromLink); note.textContent = 'You were invited. Pick your hiker, then join.'; }
   input.addEventListener('input', () => { input.value = normCode(input.value); });
+  $('btn-host').onclick = () => {
+    try { sessionStorage.setItem('rawah-host', '1'); } catch { /* private mode */ }
+    startFresh();
+  };
   $('btn-join').onclick = () => {
     const code = normCode(input.value);
     if (code.length !== 6) { note.textContent = 'Enter the six-character code your friend gave you.'; note.style.color = '#ffb3a8'; return; }
