@@ -19,6 +19,7 @@ export class Editor {
   constructor({ renderer, camera, scene, world, flora, placements, keys, toast, mind }) {
     Object.assign(this, { renderer, camera, scene, world, flora, placements, keys, toast, mind });
     this.pressed = false;               // the left button, for the sculpt brush
+    this.savedRev = undefined;          // the ledger revision last written, for the 'unsaved' marker
     this.active = false;
     this.mode = 'select';
     this.pos = new THREE.Vector3();
@@ -252,24 +253,35 @@ export class Editor {
     this.#select(was ? this.placements.get(was) : null);
   }
 
+  /** The only way to write the ledger: the Save button, then this question. Nothing in the editor saves by itself. */
+  #askSave() {
+    this.lock(false);
+    const m = this.modal;
+    const p = this.placements;
+    m.querySelector('.ed-modal-body').textContent = `This writes ${p.items.length} placement${p.items.length === 1 ? '' : 's'}, ${p.removed.length} removal${p.removed.length === 1 ? '' : 's'} and the terrain edits to data/placements.json, replacing what is there now.`;
+    m.classList.remove('hidden');
+    m.querySelector('[data-yes]').focus();
+  }
+
   async save() {
     const ledger = this.placements.toJSON();
     ledger.sculpt = this.world.sculpt.save();                     // the terrain edits (telekinesis) ride in the same file
     this.placements.sculpt = ledger.sculpt;
     const body = JSON.stringify(ledger);
-    try { localStorage.setItem('rawah-placements-draft', body); } catch { /* private window */ }
     try {
       const r = await fetch('/dev/placements', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
-      this.toast?.(r.ok ? `Saved ${this.placements.items.length} placements and ${this.placements.removed.length} removals to data/placements.json.` : `Could not save (${r.status}). The draft is kept in this browser.`, r.ok ? '' : 'warn');
-    } catch { this.toast?.('Could not reach the dev server. The draft is kept in this browser.', 'warn'); }
+      if (r.ok) this.savedRev = this.placements.revision;
+      this.toast?.(r.ok ? `Saved ${this.placements.items.length} placements and ${this.placements.removed.length} removals to data/placements.json.` : `Could not save (${r.status}).`, r.ok ? '' : 'warn');
+    } catch { this.toast?.('Could not reach the dev server, nothing was saved.', 'warn'); }
+    this.#status();
   }
 
   /** Keys the editor takes; returns true when it used one. */
   onKey(code) {
     if (!this.active) return false;
+    if (!this.modal.classList.contains('hidden')) { if (code === 'Escape') this.modal.classList.add('hidden'); return true; }
     if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '')) return code === 'Escape' ? (document.activeElement.blur(), true) : false;
     const meta = this.keys.has('MetaLeft') || this.keys.has('MetaRight') || this.keys.has('ControlLeft') || this.keys.has('ControlRight');
-    if (meta && code === 'KeyS') { this.save(); return true; }
     if (meta && code === 'KeyZ') { this.#undo(); return true; }
     if (meta && code === 'KeyD' && this.sel) { this.#push(); const c = { ...this.sel }; delete c.id; this.#select(this.placements.add(c.asset, c.x + 2, c.z + 2, c), true); return true; }
     for (const [m, key] of Object.entries(MODES)) if (code === `Digit${key}`) { this.setMode(m); return true; }
@@ -327,23 +339,48 @@ export class Editor {
     this.bar.innerHTML = `<b>Editor</b>
       <button data-mode="select" class="on">Select <kbd>1</kbd></button><button data-mode="place">Place <kbd>2</kbd></button><button data-mode="erase">Erase <kbd>3</kbd></button><button data-mode="sculpt">Sculpt <kbd>4</kbd></button>
       <span class="sep"></span><button data-g="translate">Move <kbd>T</kbd></button><button data-g="rotate">Rotate <kbd>R</kbd></button><button data-g="scale">Scale <kbd>Y</kbd></button>
-      <span class="sep"></span><button data-act="look">Look <kbd>F</kbd></button><button data-act="save">Save <kbd>⌘S</kbd></button><button data-act="undo">Undo <kbd>⌘Z</kbd></button>
+      <span class="sep"></span><button data-act="look">Look <kbd>F</kbd></button><button data-act="save" class="ed-save">Save…</button><button data-act="undo">Undo <kbd>⌘Z</kbd></button>
       <span id="ed-status"></span>`;
     this.bar.addEventListener('click', (e) => {
       const b = e.target.closest('button'); if (!b) return;
       if (b.dataset.mode) this.setMode(b.dataset.mode);
       else if (b.dataset.g) { this.controls.setMode(b.dataset.g); this.#status(); }
       else if (b.dataset.act === 'look') this.lock();
-      else if (b.dataset.act === 'save') this.save();
+      else if (b.dataset.act === 'save') this.#askSave();
       else if (b.dataset.act === 'undo') this.#undo();
     });
     this.panel = el('div', 'ed-panel glass hidden');
-    this.panel.innerHTML = `<input id="ed-search" type="search" placeholder="Search assets" autocomplete="off">
-      <div id="ed-list"></div>
-      <div class="ed-opts"><label><input type="checkbox" data-o="randYaw" checked> random turn</label><label><input type="checkbox" data-o="randScale" checked> random size</label><label><input type="checkbox" data-o="snap"> snap</label></div>
-      <div id="ed-sel"></div>
-      <p class="ed-help">Mouse looks while the cursor is locked (F or Esc frees it for the panel) · right-drag looks when it is free · WASD fly · Space/E up · Q down · Shift fast · scroll speed · click to place or select · Del delete · Sculpt: hold left to lift, Alt to sink, L to level, [ ] brush size</p>`;
-    document.body.append(this.bar, this.panel);
+    this.panel.innerHTML = `
+      <details class="ed-sec" data-sec="assets" open><summary>Assets <small id="ed-count"></small></summary>
+        <input id="ed-search" type="search" placeholder="Search assets" autocomplete="off">
+        <div id="ed-list"></div>
+      </details>
+      <details class="ed-sec" data-sec="options" open><summary>Placing</summary>
+        <div class="ed-opts"><label><input type="checkbox" data-o="randYaw" checked> random turn</label><label><input type="checkbox" data-o="randScale" checked> random size</label><label><input type="checkbox" data-o="snap"> snap to grid</label></div>
+      </details>
+      <details class="ed-sec" data-sec="sel" open><summary>Selected <small id="ed-selname"></small></summary>
+        <div id="ed-sel"><p class="ed-empty">Nothing selected. In Select mode, click a placed asset.</p></div>
+      </details>
+      <details class="ed-sec" data-sec="help"><summary>Controls</summary>
+        <p class="ed-help"><b>Look</b> with the mouse while the cursor is locked; F or Esc frees it for this panel (then right-drag looks).<br><b>Fly</b> W A S D, Space or E up, Q down, Shift faster, scroll changes the speed.<br><b>Modes</b> 1 select, 2 place, 3 erase, 4 sculpt. <b>Gizmo</b> T move, R rotate, Y scale. <b>Edit</b> Del delete, Cmd/Ctrl+D duplicate, Cmd/Ctrl+Z undo, X drop to ground.<br><b>Sculpt</b> hold left to lift, Alt to sink, L to level, [ ] brush size.<br><b>Save</b> only with the Save button, after you confirm.</p>
+      </details>`;
+    this.modal = el('div', 'ed-modal hidden');
+    this.modal.innerHTML = `<div class="ed-modal-card glass" role="dialog" aria-label="Save"><h3>Are you sure you want to save?</h3><p class="ed-modal-body"></p><div class="ed-modal-btns"><button data-no>Cancel</button><button data-yes class="primary">Yes, save</button></div></div>`;
+    this.modal.addEventListener('click', async (e) => {
+      const b = e.target.closest('button');
+      if (!b && e.target !== this.modal) return;
+      this.modal.classList.add('hidden');
+      if (b && b.dataset.yes !== undefined) await this.save();
+    });
+    document.body.append(this.bar, this.panel, this.modal);
+    this.ui = (() => { try { return JSON.parse(localStorage.getItem('rawah-editor-ui')) || {}; } catch { return {}; } })();
+    this.ui.closed = new Set(this.ui.closed || []);
+    const keep = () => { try { localStorage.setItem('rawah-editor-ui', JSON.stringify({ closed: [...this.ui.closed] })); } catch { /* private window */ } };
+    this.keepUi = keep;
+    for (const d of this.panel.querySelectorAll('details.ed-sec')) {
+      d.open = !this.ui.closed.has(d.dataset.sec);
+      d.addEventListener('toggle', () => { if (d.open) this.ui.closed.delete(d.dataset.sec); else this.ui.closed.add(d.dataset.sec); keep(); });
+    }
     this.list = this.panel.querySelector('#ed-list');
     this.search = this.panel.querySelector('#ed-search');
     this.search.addEventListener('input', () => this.#fillList());
@@ -357,17 +394,30 @@ export class Editor {
   #fillList() {
     const q = this.search.value.trim().toLowerCase();
     this.list.innerHTML = '';
-    let group = '';
+    const groups = new Map();
     for (const a of this.placements.assets) {
       if (q && !a.name.toLowerCase().includes(q) && !a.group.toLowerCase().includes(q)) continue;
-      if (a.group !== group) { group = a.group; this.list.append(Object.assign(document.createElement('h4'), { textContent: group })); }
-      const b = document.createElement('button');
-      b.className = 'ed-asset' + (this.asset === a ? ' on' : '');
-      b.dataset.id = a.id;
-      b.innerHTML = `${a.img ? `<img src="${a.img}" alt="">` : ''}<span>${a.name}</span>`;
-      b.onclick = () => { this.asset = a; this.setMode('place'); this.#fillList(); };
-      this.list.append(b);
+      if (!groups.has(a.group)) groups.set(a.group, []);
+      groups.get(a.group).push(a);
     }
+    for (const [group, list] of groups) {
+      const d = document.createElement('details');
+      d.className = 'ed-group';
+      d.open = !!q || !this.ui.closed.has('g:' + group);
+      d.innerHTML = `<summary>${group} <small>${list.length}</small></summary><div class="ed-grid"></div>`;
+      d.addEventListener('toggle', () => { if (q) return; if (d.open) this.ui.closed.delete('g:' + group); else this.ui.closed.add('g:' + group); this.keepUi(); });
+      const grid = d.querySelector('.ed-grid');
+      for (const a of list) {
+        const b = document.createElement('button');
+        b.className = 'ed-asset' + (this.asset === a ? ' on' : '');
+        b.dataset.id = a.id;
+        b.innerHTML = `${a.img ? `<img src="${a.img}" alt="">` : ''}<span>${a.name}</span>`;
+        b.onclick = () => { this.asset = a; this.setMode('place'); this.#fillList(); };
+        grid.append(b);
+      }
+      this.list.append(d);
+    }
+    this.panel.querySelector('#ed-count').textContent = `${this.placements.assets.length}`;
   }
 
   /** Thumbnails of the assets, drawn once from their own geometry. */
@@ -385,7 +435,8 @@ export class Editor {
 
   #fields(force = false) {
     const box = this.panel.querySelector('#ed-sel'), it = this.sel;
-    if (!it) { if (box.dataset.id) { box.dataset.id = ''; box.innerHTML = ''; } return; }
+    if (!it) { if (box.dataset.id !== '') { box.dataset.id = ''; box.innerHTML = '<p class="ed-empty">Nothing selected. In Select mode, click a placed asset.</p>'; this.panel.querySelector('#ed-selname').textContent = ''; } return; }
+    this.panel.querySelector('#ed-selname').textContent = this.placements.byId.get(it.asset).name;
     const deg = (r) => +(r * 180 / Math.PI).toFixed(1);
     if (force || box.dataset.id !== it.id) {
       box.dataset.id = it.id;
@@ -412,7 +463,10 @@ export class Editor {
   #status() {
     const s = this.bar.querySelector('#ed-status');
     if (!s) return;
-    s.textContent = `${this.placements.items.length} placed · ${this.placements.removed.length} removed · fly ×${this.speed.toFixed(1)}`;
+    const dirty = this.savedRev !== this.placements.revision && (this.savedRev !== undefined || this.placements.revision > 1);
+    s.textContent = `${this.placements.items.length} placed · ${this.placements.removed.length} removed · fly ×${this.speed.toFixed(1)}${dirty ? ' · unsaved' : ''}`;
+    s.classList.toggle('dirty', dirty);
+    this.bar.querySelector('.ed-save')?.classList.toggle('dirty', dirty);
     for (const b of this.bar.querySelectorAll('[data-g]')) b.classList.toggle('on', b.dataset.g === this.controls.mode);
   }
 }

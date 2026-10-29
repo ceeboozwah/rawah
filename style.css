@@ -607,3 +607,28 @@ body.editing #hud { opacity: 0.35; }
 body.editing #hotbar { pointer-events: auto; z-index: 41; }
 body.ed-locked::after { content: ''; position: fixed; left: 50%; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border: 2px solid rgba(255, 255, 255, 0.85); border-radius: 50%; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5); z-index: 60; pointer-events: none; }
 body.ed-locked .ed-panel, body.ed-locked .ed-bar { opacity: 0.55; pointer-events: none; }
+
+/* the editor panel, organised: collapsible sections and asset groups */
+.ed-panel { overflow-y: auto; gap: 6px; }
+.ed-sec { border: 1px solid var(--edge); border-radius: 10px; background: rgba(255, 255, 255, 0.03); }
+.ed-sec > summary, .ed-group > summary { cursor: pointer; list-style: none; padding: 8px 10px; font: 600 var(--t-sm) var(--sans); color: var(--ink); display: flex; align-items: center; gap: 6px; user-select: none; }
+.ed-sec > summary::-webkit-details-marker, .ed-group > summary::-webkit-details-marker { display: none; }
+.ed-sec > summary::before, .ed-group > summary::before { content: '▸'; font-size: 10px; color: var(--faint); transition: transform 0.12s; }
+.ed-sec[open] > summary::before, .ed-group[open] > summary::before { transform: rotate(90deg); }
+.ed-sec > :not(summary) { margin: 0 10px 10px; }
+.ed-sec small, .ed-group small { color: var(--faint); font-weight: 500; font-size: var(--t-xs); }
+.ed-group { border-top: 1px solid var(--edge); margin: 6px 0 0 !important; }
+.ed-group > summary { padding: 6px 2px; font-size: var(--t-xs); letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); }
+.ed-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding-bottom: 4px; }
+#ed-list { display: block; overflow: visible; }
+.ed-empty { margin: 0 !important; font: 400 var(--t-xs) var(--sans); color: var(--faint); }
+.ed-save.dirty { border-color: var(--accent); color: var(--accent); }
+#ed-status.dirty { color: var(--accent); }
+.ed-modal { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; background: rgba(5, 8, 12, 0.55); }
+.ed-modal-card { width: min(380px, 90vw); padding: 18px; border-radius: 16px; background: var(--glass-strong); }
+.ed-modal-card h3 { margin: 0 0 8px; font: 400 var(--t-lg, 20px) var(--display); }
+.ed-modal-card p { margin: 0 0 14px; font: 400 var(--t-sm) var(--sans); color: var(--dim); line-height: 1.45; }
+.ed-modal-btns { display: flex; gap: 8px; justify-content: flex-end; }
+.ed-modal-btns button { font: 600 var(--t-sm) var(--sans); padding: 8px 14px; border-radius: 10px; border: 1px solid var(--edge); background: rgba(255, 255, 255, 0.08); color: var(--ink); cursor: pointer; }
+.ed-modal-btns button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.ed-sec > input[type=search] { width: calc(100% - 20px) !important; }
