@@ -40,6 +40,8 @@ import { Intro } from './intro.js';
 import { Hydration, relativeHumidity, heatIndexC, heatCategory, BODY_KG } from './hydration.js';
 import { Gear, buildCanteen, buildBladder, buildPot, buildStraw, buildFilter } from './gear.js';
 import { Inventory, InventoryUI, ITEMS } from './inventory.js';
+import { Placements } from './placements.js';
+import { Editor } from './editor.js';
 import { renderIcons } from './icons.js';
 import { buildTool } from './tools.js';
 import { kindOf } from './water.js';
@@ -243,6 +245,10 @@ fishing.onRipple = (x, z, size) => { waves.drop(x, z, 0.2 + 0.16 * size, 0.006 +
 const roast = new Roast(scene);
 scene.add(grass.mesh);
 if (forbs) scene.add(forbs.mesh, shrubs.mesh);
+// hand-placed assets (data/placements.json, made with the world editor) and, on a local host, the editor itself (F2)
+const placements = new Placements(world, flora, scene);
+await placements.load();
+let editor = null;
 const boxels = new Boxels(world, { n: 512 });
 BOXEL.value = boxels.texture;
 let bxLast = null, bxAcc = 0, bxRain = 0;
@@ -390,9 +396,12 @@ $('btn-continue').classList.toggle('hidden', !hasSave);
 // ------------------------------------------------------------------ input
 const input = new Input(renderer.domElement);
 const { keys, pressed } = input;
+if (DEV) editor = new Editor({ renderer, camera, scene, world, flora, placements, keys, toast: (t, k) => hud.toast(t, k) });
 if (isTouch) input.enableTouch(document.body);
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.started && !state.paused) pause(true); });
 input.onPress = (code) => {
+  if (code === 'F2' && editor && state.started && !state.paused && !state.intro && !state.travel && !map.open && !invOpen) { editor.toggle(); return; }
+  if (editor?.active && editor.onKey(code)) return;
   if (state.intro) { intro.skip(); return; }
   if (state.ask) {
     if (code === 'KeyY' || code === 'Enter') answerAsk(true);
@@ -429,9 +438,9 @@ input.onPad = (name, stickOnly) => {
   if (screen === $('pause') && (name === 'LB' || name === 'RB')) { cycleTab(name === 'RB' ? 1 : -1); return; }
   if (screen) menuPad(screen, name);
 };
-renderer.domElement.addEventListener('click', () => { if (state.started && !state.paused) lockPointer(); });
+renderer.domElement.addEventListener('click', () => { if (state.started && !state.paused && !editor?.active) lockPointer(); });
 document.addEventListener('pointerlockchange', () => {
-  if (document.pointerLockElement !== renderer.domElement && state.started && !map.open && !invOpen && !state.sleeping && !state.travel && !state.intro) pause(true);
+  if (document.pointerLockElement !== renderer.domElement && state.started && !map.open && !invOpen && !editor?.active && !state.sleeping && !state.travel && !state.intro) pause(true);
 });
 
 /** Gamepad focus for menus: D-pad or stick moves, A presses, left/right adjusts sliders, B backs out. */
@@ -1633,7 +1642,7 @@ if (sessionStorage.getItem('rawah-autostart')) { sessionStorage.removeItem('rawa
 function tick(dt, draw = true) {
   t += dt;
   let gameMin = 0;
-  const live = state.started && !state.paused && !state.sleeping && !state.rescue && !state.travel && !map.open && !togetherOpen && !invOpen;
+  const live = state.started && !state.paused && !state.sleeping && !state.rescue && !state.travel && !map.open && !togetherOpen && !invOpen && !editor?.active;
   if (state.sleeping) {
     state.sleeping.t += dt;
     if (state.sleeping.t > 2.2) finishSleep();
@@ -1839,6 +1848,12 @@ function tick(dt, draw = true) {
     cullView();
     flora.update(focus, 1, dt);
     audio.engine(!r.done && r.engine > 0.05, clamp(r.engine / 18, 0, 1), r.engine > 0.5 ? 0.45 : 0);
+  } else if (editor?.active) {
+    // the world editor: a free camera, trees streamed around it
+    editor.update(dt);
+    focus = editor.focus;
+    cullView();
+    flora.update(focus, 1, dt);
   } else if (state.travel) {
     // stream trees under the flight first, then around where you'll land
     const u = flyStep(dt, flyFocus);
@@ -1854,6 +1869,7 @@ function tick(dt, draw = true) {
     if (floraTimer > 0.12) floraTimer = 0;
   }
   eye.copy(camera.position);
+  if (!editor?.active) placements.update(camera);
 
   camera.updateMatrixWorld();
   terrain.update(camera);
@@ -2064,7 +2080,7 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, fields, hydration, gear, inventory, forbs, shrubs, invUI, smokeCol, flare,
+    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, fields, hydration, gear, inventory, placements, get editor() { return editor; }, forbs, shrubs, invUI, smokeCol, flare,
     benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, hiker, rig, avatar, party, route, gmap: map, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },

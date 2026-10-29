@@ -9,6 +9,7 @@ on each reload, so a normal Reload always runs the latest code.
 
 Usage:  python3 devserver.py [port]   (default 5179)
 """
+import json
 import os
 import sys
 import urllib.error
@@ -32,6 +33,9 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         """/crew/chat/completions: forward the crew's chat requests to an OpenAI-style server with a key that stays in this
         process's environment (NVIDIA_API_KEY, optional RAWAH_CREW_UPSTREAM). Local use only; with no key it answers 501."""
+        if self.path == '/dev/placements':
+            self.save_placements()
+            return
         if not self.path.startswith('/crew/'):
             self.send_error(404)
             return
@@ -55,6 +59,37 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
         self.send_header('Content-Length', str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+
+def _save_placements(self):
+    """/dev/placements: write the world editor's ledger to data/placements.json (one placement per line, so git diffs read well).
+    Only from this machine, and only a well-formed ledger."""
+    if self.client_address[0] not in ('127.0.0.1', '::1'):
+        self.send_error(403)
+        return
+    try:
+        d = json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)))
+        assert isinstance(d.get('items'), list) and isinstance(d.get('removed', []), list)
+        for it in d['items']:
+            assert isinstance(it.get('asset'), str) and all(isinstance(it.get(k), (int, float)) for k in ('x', 'z', 'dy', 'yaw', 'pitch', 'roll', 's'))
+    except Exception:
+        self.send_error(400, 'not a placement ledger')
+        return
+    lines = ',\n'.join('  ' + json.dumps(it, separators=(',', ':')) for it in d['items'])
+    text = '{"version":1,\n"items":[\n' + lines + '\n],\n"removed":' + json.dumps(d.get('removed', []), separators=(',', ':')) + '}\n'
+    path = os.path.join(ROOT, 'data', 'placements.json')
+    tmp = path + '.tmp'
+    with open(tmp, 'w') as f:
+        f.write(text)
+    os.replace(tmp, path)
+    self.send_response(200)
+    self.send_header('Content-Type', 'application/json')
+    self.send_header('Content-Length', '2')
+    self.end_headers()
+    self.wfile.write(b'ok')
+
+
+NoCacheHandler.save_placements = _save_placements
 
 
 if __name__ == '__main__':
