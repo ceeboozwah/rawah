@@ -273,6 +273,16 @@ export class Wood {
     } else this.#buildTrunkMesh(t);
   }
 
+  /** A friend's [U] or [J], done here: `carried` is what they were carrying (ours stays ours), and the toasts are theirs. */
+  replay(kind, d) {
+    const mine = this.carried;
+    this.carried = d.c || 0;
+    try {
+      if (kind === 'use') this.interact({ x: d.x, y: d.y || 0, z: d.z });
+      else this.drop({ pos: { x: d.x, y: d.y || 0, z: d.z }, yaw: d.yaw }, d.heading);
+    } finally { this.carried = mine; this.events.length = 0; }
+  }
+
   /** An axe stroke from the hiker (a `strike` event). Returns true if it landed on a lying trunk. */
   strike(e, hiker) {
     const p = hiker.pos;

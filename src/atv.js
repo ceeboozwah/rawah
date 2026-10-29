@@ -153,6 +153,21 @@ export class ATV {
     this.#pose();
   }
 
+  /** A friend is driving it: take the pose they send (no physics here). */
+  follow(x, z, yaw, speed, dt) {
+    const k = 1 - Math.exp(-14 * dt), w = this.world;
+    this.pos.x += (x - this.pos.x) * k; this.pos.z += (z - this.pos.z) * k;
+    let d = yaw - this.yaw; d = Math.atan2(Math.sin(d), Math.cos(d)); this.yaw += d * k;
+    this.speed = speed;
+    const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw), p = this.pos;
+    const hf = w.height(p.x + fx * WHEELBASE / 2, p.z + fz * WHEELBASE / 2), hr = w.height(p.x - fx * WHEELBASE / 2, p.z - fz * WHEELBASE / 2);
+    this.y += ((hf + hr) / 2 - this.y) * k;
+    this.pitch += (Math.atan2(hf - hr, WHEELBASE) - this.pitch) * k;
+    this.roll = 0; p.y = this.y;
+    this.wheelSpin += speed * dt / WHEEL_R;
+    this.#pose();
+  }
+
   near(p) { return Math.hypot(p.x - this.pos.x, p.z - this.pos.z) < SEAT_RADIUS; }
 
   /** Where a rider's feet-origin goes: over the long seat, sunk so the hips land on the cushion. Slot 0 drives, slot 1 rides on the back. */

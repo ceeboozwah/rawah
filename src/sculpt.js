@@ -165,17 +165,21 @@ export class Sculpt {
   }
 
   // chunks as centimetres in an Int16, base64, for the save
-  save() {
+  save(rect = null) {
     const out = [];
     for (const [key, slot] of this.slots) {
       const cx = key % this.cn, cz = Math.floor(key / this.cn), base = this.#base(slot);
+      if (rect) {
+        const x0 = cx * CHUNK * EC - this.half, z0 = cz * CHUNK * EC - this.half, w = CHUNK * EC;
+        if (x0 + w < rect.x0 || x0 > rect.x1 || z0 + w < rect.z0 || z0 > rect.z1) continue;
+      }
       const q = new Int16Array(CHUNK * CHUNK);
       let any = false;
       for (let j = 0; j < CHUNK; j++) for (let i = 0; i < CHUNK; i++) {
         const c = Math.round(this.atlas[base + j * ATLAS + i] * 100);
         q[j * CHUNK + i] = c; if (c) any = true;
       }
-      if (!any) continue;
+      if (!any && !rect) continue;
       let s = '';
       const bytes = new Uint8Array(q.buffer);
       for (let i = 0; i < bytes.length; i += 0x2000) s += String.fromCharCode(...bytes.subarray(i, i + 0x2000));
@@ -186,7 +190,15 @@ export class Sculpt {
 
   load(list) {
     this.clear();
+    this.merge(list);
+  }
+
+  /** Lay chunks over what is there (a friend's reshaping). Returns the metres they cover, for re-settling what stands on them. */
+  merge(list) {
+    const rect = { x0: Infinity, z0: Infinity, x1: -Infinity, z1: -Infinity };
     for (const [cx, cz, b64] of list || []) {
+      const w = CHUNK * EC, x0 = cx * w - this.half, z0 = cz * w - this.half;
+      rect.x0 = Math.min(rect.x0, x0); rect.z0 = Math.min(rect.z0, z0); rect.x1 = Math.max(rect.x1, x0 + w); rect.z1 = Math.max(rect.z1, z0 + w);
       try {
         const s = atob(b64), bytes = new Uint8Array(s.length);
         for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
@@ -198,5 +210,6 @@ export class Sculpt {
       } catch { /* a damaged chunk is just left flat */ }
     }
     this.touched = true;
+    return rect;
   }
 }

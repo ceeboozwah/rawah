@@ -139,13 +139,18 @@ class Remote {
     if (this.char.tool !== t.tl && t.tl) this.char.setTool(t.tl);
     // a friend talking on the radio holds it up
     if (this.ptt && !this.radioObj) this.radioObj = buildRadio();
-    this.char.setItem?.(this.ptt ? this.radioObj : null);
+    // what is in their hands: a stone, the canteen, or the radio while they talk
+    const hk = t.rk ? `rk${t.rk.join()}` : t.it ? `it${t.it}` : '';
+    if (hk !== this.holdKey) { this.holdKey = hk; this.hold = hk ? this.net.makeHold?.(t) || null : null; }
+    this.char.setItem?.(this.ptt ? this.radioObj : this.hold);
     this.char.update(dt, b);
+    this.net.frame?.(this, dt);
     this.label.sprite.position.set(b.pos.x, b.pos.y + 2.25, b.pos.z);
     this.label.draw(this.speaking, false);
   }
 
   dispose() {
+    this.net.gone?.(this);
     this.net.scene.remove(this.label.sprite);
     this.label.sprite.material.map?.dispose();
     const c = this.char;

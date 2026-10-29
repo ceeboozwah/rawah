@@ -339,6 +339,7 @@ export class Props {
     mesh.castShadow = true;
     rockPose(kind, s, r, mesh.quaternion, mesh.scale);
     this.carry = { kind, vi, s, r, mesh };
+    this.onAct?.('rock-lift', { kind, vi, s, r, x: stone.loose ? stone.loose.x : stone.placed.x, z: stone.loose ? stone.loose.z : stone.placed.z });
     this.hiker.load = 1;
     this.#showCarry();
     this.audio.thud(false);
@@ -360,7 +361,29 @@ export class Props {
     c.mesh.parent?.remove(c.mesh);
     this.carry = null;
     this.hiker.load = 0;
+    this.onAct?.('rock-put', { kind: c.kind, vi: c.vi, s: c.s, r: c.r, x, y, z, vx, vz, vy, air });
     this.#spawn(c.kind, c.vi, x, y, z, c.s, c.r, vx, vz, vy, air);
+  }
+
+  /** A friend picked a stone up at (x, z): it leaves the ground here too. */
+  farLift(d) {
+    const l = this.rocks.find((k) => k.kind === d.kind && Math.hypot(k.x - d.x, k.z - d.z) < 0.8);
+    if (l) { this.#remove(l); return; }
+    const h = this.flora.find(d.x, d.z, 0.8, [d.kind]);
+    if (h) this.flora.take(h);
+  }
+
+  /** A friend put or threw a stone down. */
+  farPut(d) { this.#spawn(d.kind, d.vi, d.x, d.y, d.z, d.s, d.r, d.vx, d.vz, d.vy, d.air); }
+
+  /** The stone a friend carries, for their hand. */
+  rockHeld(kind, vi, s, r) {
+    const { geometry, material } = this.flora.rockParts(kind, vi);
+    const mesh = new THREE.Mesh(geometry, material);
+    rockPose(kind, s, r, mesh.quaternion, mesh.scale);
+    const g = new THREE.Group();
+    g.add(mesh);
+    return g;
   }
 
   /** Left click with a stone in hand. */
@@ -701,6 +724,32 @@ export class Props {
       this.hiker.load = 1;
     }
     this.setTool(d.tool);
+  }
+
+  /** What a friend who joins late needs: the felled trees, stumps, cuts and loose stones (not the tool in hand, nor the stone being carried). */
+  share() { const d = this.save(); delete d.tool; delete d.carry; return d; }
+
+  /** A host's `share()`, laid over this world. */
+  absorb(d) {
+    for (const k of d.removed || []) this.flora.removed.add(k);
+    this.flora.sweep();
+    this.stumps = this.stumps.concat(d.stumps || []);
+    this.#writeStumps();
+    for (const [kind, vi, x, y, z, s, r, yaw, shade] of d.lying || []) {
+      if (!this.flora.meshes[kind]?.[vi]) continue;
+      const { mesh, height } = this.flora.treeMesh(kind, vi, shade);
+      this.scene.add(mesh);
+      const f = { mesh, kind, vi, x, y, z, s, r, yaw, shade, t: 99, dur: 1, H: height * s };
+      this.#poseTree(f, REST);
+      this.lying.push(f);
+    }
+    for (const [kind, vi, x, e, z, s, r, ...sides] of d.stumpCuts || []) if (this.flora.meshes[kind]?.[vi]) this.#makeStump(kind, vi, x, e, z, s, r, sides);
+    for (const [kind, vi, x, e, z, s, r, taken, ...sides] of d.cuts || []) {
+      if (!this.flora.meshes[kind]?.[vi]) continue;
+      this.damage.set(itemKey(kind, x, z), taken);
+      this.#carve(this.#makeCut(kind, vi, x, e, z, s, r, taken, sides));
+    }
+    for (const [kind, vi, x, z, s, r] of d.rocks || []) if (this.flora.meshes[kind]?.[vi]) this.#spawn(kind, vi, x, 0, z, s, r);
   }
 
   /** Put everything back (a new game): the world is rebuilt from placement data. */

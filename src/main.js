@@ -412,7 +412,15 @@ const net = new Net({
   me: () => ({ name: playerName[0].toUpperCase() + playerName.slice(1), character: playerName }),
   snapshot: () => {
     const h = hiker, a = h.action, r = (v) => Math.round(v * 100) / 100;
-    return { x: r(h.pos.x), y: r(h.pos.y), z: r(h.pos.z), vx: r(h.vel.x), vz: r(h.vel.z), yaw: r(h.yaw), pitch: r(h.pitch || 0), m: h.mode, s: h.stance, g: !!h.grounded, sl: !!h.sliding, re: !!h.resting, f: !!h.flip, cs: r(h.climbSpeed || 0), wx: r(h.wallUp?.x || 0), wy: r(h.wallUp?.y || 0), tl: h.tool, em: h.emote || '', a: a ? [a.kind, a.id] : 0 };
+    const riding = atv.riding, src = riding ? _seat : h.pos;
+    const extra = {
+      it: avatar.itemObj && avatar.itemObj === gear.held ? 1 : 0,
+      rk: props.carry ? [props.carry.kind, props.carry.vi, r(props.carry.s), r(props.carry.r)] : 0,
+      ro: roast.active ? [r(roast.extend), r(roast.cook)] : 0,
+      gs: gear.station.visible ? gear.station.children.map((c) => [c.visible ? 1 : 0, r(c.position.x), r(c.position.y), r(c.position.z), +c.quaternion.x.toFixed(3), +c.quaternion.y.toFixed(3), +c.quaternion.z.toFixed(3), +c.quaternion.w.toFixed(3), r(c.scale.x)]) : 0,
+      av: riding ? [r(atv.pos.x), r(atv.pos.z), r(atv.yaw), r(atv.speed)] : 0,
+    };
+    return { ...extra, x: r(src.x), y: r(src.y), z: r(src.z), vx: riding ? 0 : r(h.vel.x), vz: riding ? 0 : r(h.vel.z), yaw: r(riding ? atv.yaw : h.yaw), pitch: r(h.pitch || 0), m: riding ? 'walk' : h.mode, s: riding ? 'stand' : h.stance, g: !!h.grounded, sl: !!h.sliding, re: !!(h.resting || h.sitting || riding || state.sleeping), f: !!h.flip, cs: r(h.climbSpeed || 0), wx: r(h.wallUp?.x || 0), wy: r(h.wallUp?.y || 0), tl: h.tool, em: h.emote || '', a: a ? [a.kind, a.id] : 0 };
   },
   info: () => ({ time: { hour: state.hour, day: state.day, doy: calendar.doy }, weather: weather.save(), pos: { x: hiker.pos.x, z: hiker.pos.z } }),
   timeNow: () => ({ hour: state.hour, day: state.day }),
@@ -421,6 +429,9 @@ const net = new Net({
   onTime: (t) => { if (Math.abs((t.day * 24 + t.hour) - (state.day * 24 + state.hour)) > 0.04) { state.hour = t.hour; state.day = t.day; } },
   // what a friend did, replayed here through the same code (net.applying stops it echoing back)
   onEvent: (k, d, from) => replayFriend(k, d, from),
+  makeHold: (t) => (t.rk ? props.rockHeld(t.rk[0], t.rk[1], t.rk[2], t.rk[3]) : t.it ? buildCanteen() : null),
+  frame: (r, dt) => friendFrame(r, dt),
+  gone: (r) => { const g = ghostRoast.get(r.id); if (g) { g.drop(); ghostRoast.delete(r.id); } fishing.ghost(r.id, null); const s = ghostStation.get(r.id); if (s) { scene.remove(s); ghostStation.delete(r.id); } },
   catchUp: () => {
     const out = [];
     if (camp.tent) out.push(['camp-pitch', { ...camp.tent }]);
@@ -428,6 +439,9 @@ const net = new Net({
     if (coffee.rigged) out.push(['cof-rig']);
     if (coffee.pot.mode !== 'idle') out.push(['cof-state', { mode: coffee.pot.mode, brew: coffee.pot.brew, left: coffee.pot.left }]);
     if (breakfast.mode === 'cooking') out.push(['cook-start', { cook: breakfast.cook }]);
+    out.push(['props', props.share()]);
+    const sc = world.sculpt.save();
+    for (let i = 0; i < sc.length; i += 12) out.push(['sculpt', sc.slice(i, i + 12)]);
     for (const t of fireworks.tubes) if (t.state === 'idle') out.push(['fw-place', { x: t.x, z: t.z, style: t.style, tx: t.tilt[0], tz: t.tilt[1], yaw: t.mesh.rotation.y }]);
     return out;
   },
@@ -460,6 +474,12 @@ function replayFriend(k, d, from) {
     case 'cof-pour': coffee.pot.left -= d.n; if (coffee.pot.left <= 0) coffee.pot.mode = 'idle'; break;
     case 'cook-start': if (fire) { breakfast.start(true, fire, fire); if (d?.cook) breakfast.cook = d.cook; } break;
     case 'cook-eat': breakfast.mode = 'off'; breakfast.cook = 0; breakfast.ready = false; break;
+    case 'props': props.absorb(d); break;
+    case 'sculpt': shaped(world.sculpt.merge(d)); break;
+    case 'rock-lift': props.farLift(d); break;
+    case 'rock-put': props.farPut(d); break;
+    case 'wood-use': wood.replay('use', d); break;
+    case 'wood-drop': wood.replay('drop', d); break;
     case 'fw-place': if (!fireworks.tubes.some((t) => Math.hypot(t.x - d.x, t.z - d.z) < 0.3)) fireworks.put(d.x, d.z, d.style, d.tx, d.tz, d.yaw); break;
     case 'fw-light': fireworks.lightAt(d.x, d.z); break;
     case 'fw-pick': fireworks.pickUp({ x: d.x, z: d.z }); break;
@@ -470,7 +490,31 @@ function replayFriend(k, d, from) {
   // a friend's doings are not messages to you
   coffee.events.length = 0; breakfast.events.length = 0;
 }
-for (const o of [fireworks, coffee, breakfast, props, fishing]) o.onAct = (k, d) => net.event(k, d);
+const ghostRoast = new Map(), ghostStation = new Map();
+const _gf = new THREE.Vector3(), _gr = new THREE.Vector3(), _gh = new THREE.Vector3();
+/** Each frame, per friend: their marshmallow stick over the fire, and the quad when they ride it. */
+function friendFrame(r, dt) {
+  const t = r.target, b = r.b;
+  if (!t) return;
+  let g = ghostRoast.get(r.id);
+  if (t.ro) {
+    if (!g) ghostRoast.set(r.id, g = new Roast(scene));
+    if (!g.active) g.start();
+    const sy = Math.sin(b.yaw), cy = Math.cos(b.yaw), f = camp.fire;
+    _gf.set(-sy, 0, -cy); _gr.set(cy, 0, -sy);
+    _gh.set(b.pos.x + _gr.x * 0.26 + _gf.x * 0.3, b.pos.y + (b.resting ? 0.8 : 1.08), b.pos.z + _gr.z * 0.26 + _gf.z * 0.3);
+    g.update(dt, { hand: _gh, fwd: _gf, right: _gr, t: performance.now() / 1000, fire: f ? { x: f.x, z: f.z, y: camp.flameBase, fuel: Math.min(1, f.life / 25) } : null, hold: t.ro[0] > 0.5 });
+  } else if (g?.active) g.drop();
+  // the canteen, filter and cup they have set out on the ground
+  let st = ghostStation.get(r.id);
+  if (t.gs) {
+    if (!st) { st = gear.station.clone(true); scene.add(st); ghostStation.set(r.id, st); }
+    st.visible = true;
+    st.children.forEach((c, i) => { const q = t.gs[i]; if (!q) return; c.visible = !!q[0]; c.position.set(q[1], q[2], q[3]); c.quaternion.set(q[4], q[5], q[6], q[7]); c.scale.setScalar(q[8]); });
+  } else if (st) st.visible = false;
+  if (t.av && !atv.riding) atv.follow(t.av[0], t.av[1], t.av[2], t.av[3], dt);
+}
+for (const o of [fireworks, coffee, breakfast, props, fishing, wood]) o.onAct = (k, d) => net.event(k, d);
 if (DEV) editor = new Editor({ renderer, camera, scene, world, flora, placements, keys, toast: (t, k) => hud.toast(t, k), mind });
 if (isTouch) input.enableTouch(document.body);
 const recorder = new Recorder({ canvas: renderer.domElement, audio, hud, pause: () => { if (state.started && !state.paused) pause(true); }, resume: () => pause(false) });
@@ -1024,7 +1068,7 @@ function act() {
       if (dNear > 3.2 && waterUse()) { /* the canteen: fill, filter or scrub */ }
       else if (dBrk < dCof) { if (breakfast.interact()) save(); }
       else if (dCof < Infinity) { if (coffee.interact(p)) save(); }
-      else if (dWood < 3.2 && dWood < dStool && dWood < dAtv) { if (wood.interact(p)) save(); }
+      else if (dWood < 3.2 && dWood < dStool && dWood < dAtv) { const c = wood.carried; if (wood.interact(p)) { net.event('wood-use', { x: p.x, y: p.y, z: p.z, c }); save(); } }
       else if (dAtv < dStool && dAtv < Infinity) mountATV();
       else if (party.hold) party.release();
       else if (party.engageable(p, hiker.yaw)) party.engage(party.engageable(p, hiker.yaw));
@@ -1150,15 +1194,16 @@ function marshmallow() {
 }
 
 /** [K] cook (coffee, then bacon and eggs; or drop your firewood away from the fire), [O] sip, [J] drop firewood. */
+let lastCarried = 0;
 function camping() {
   if (atv.riding || fishing.busy || state.cut || hiker.mode !== 'walk') return;
   const fireNear = camp.fire && Math.hypot(camp.fire.x - hiker.pos.x, camp.fire.z - hiker.pos.z) < 4.5;
   const heading = rig.mode === 'first' ? hiker.yaw : avatar.heading;
   if (pressed.has('KeyK') && state.seat < 0 && hiker.tool !== 'fireworks') {
     if (fireNear || wood.carried <= 0) { const cooking = coffee.rigged; if (cooking ? breakfast.start(true, camp.fire, hiker.pos) : coffee.rig(camp.fire, hiker.pos)) { crewTalk.smell(cooking ? 'bacon' : 'coffee', camp.fire.x, camp.fire.z); save(); } }
-    else if (wood.drop({ pos: hiker.pos, yaw: hiker.yaw }, heading)) save();
+    else if (((lastCarried = wood.carried), wood.drop({ pos: hiker.pos, yaw: hiker.yaw }, heading))) { net.event('wood-drop', { x: hiker.pos.x, y: hiker.pos.y, z: hiker.pos.z, yaw: hiker.yaw, heading, c: lastCarried }); save(); }
   }
-  if (pressed.has('KeyJ') && state.seat < 0 && wood.drop({ pos: hiker.pos, yaw: hiker.yaw }, heading)) save();
+  if (pressed.has('KeyJ') && state.seat < 0) { const c = wood.carried; if (wood.drop({ pos: hiker.pos, yaw: hiker.yaw }, heading)) { net.event('wood-drop', { x: hiker.pos.x, y: hiker.pos.y, z: hiker.pos.z, yaw: hiker.yaw, heading, c }); save(); } }
   if (pressed.has('KeyO') && !state.sleeping) coffee.sip();
 }
 
@@ -1848,7 +1893,7 @@ function tick(dt, draw = true) {
   const sc = editor?.active ? editor.sculptInput() : null;
   mind.update(dt, live, sc ? sc.keys : {
     lift: keys.has('KeyQ') || keys.has('Mouse0'), sink: keys.has('KeyR') || keys.has('Mouse2'), level: keys.has('KeyE'),
-  }, shaped, sc && sc.aim);
+  }, (rect) => { shaped(rect); if (Number.isFinite(rect.x0)) net.event('sculpt', world.sculpt.save(rect)); }, sc && sc.aim);
   props.update(dt, live);
   if (state.started) party.update(live ? dt : 0, hiker);
   if (state.started) crewTalk.update(live ? dt : 0, { player: hiker.pos, storm: weather.storm, wind: WIND_DIR });
