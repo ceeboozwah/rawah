@@ -226,11 +226,12 @@ const weather = new Weather();
 weather.override = REGIMES[settings.weather] ? settings.weather : null;
 const precip = new Precip(Q.precip);
 scene.add(precip.mesh);
-const veg = await loadVegetation();     // the cut-out grasses, wildflowers and shrubs (tools/cut_vegetation.py)
-flora.noWillow = !!veg;                  // the willow thickets are the shrub layer's now
+const veg = new URLSearchParams(location.search).has('noveg') ? null : await loadVegetation();     // the cut-out grasses, wildflowers and shrubs (tools/cut_vegetation.py)
+flora.noWillow = !!veg && Q.grass.radius >= 30;                  // the willow thickets are the shrub layer's now
 const grass = new Grass(terrain, { ...Q.grass, veg: veg && veg.grass }, flora.uniforms);
-const forbs = veg && new Grass(terrain, { radius: Math.min(34, Q.grass.radius * 0.7), spacing: Math.max(0.8, Q.grass.spacing * 2.0), layer: 'forbs', veg: veg.forbs, shared: grass }, flora.uniforms);
-const shrubs = veg && new Grass(terrain, { radius: Q.grass.radius >= 40 ? 85 : 55, spacing: 2.6, layer: 'shrubs', veg: veg.shrubs, shared: grass }, flora.uniforms);
+const VEGQ = Q.grass.radius >= 50 ? { f: [26, 1.0], s: [64, 3.0] } : Q.grass.radius >= 30 ? { f: [18, 1.2], s: [44, 3.2] } : null;   // wildflower and shrub layers by preset; off on low
+const forbs = veg && VEGQ && new Grass(terrain, { radius: VEGQ.f[0], spacing: VEGQ.f[1], layer: 'forbs', veg: veg.forbs, shared: grass }, flora.uniforms);
+const shrubs = veg && VEGQ && new Grass(terrain, { radius: VEGQ.s[0], spacing: VEGQ.s[1], layer: 'shrubs', veg: veg.shrubs, shared: grass }, flora.uniforms);
 const leafFall = new LeafFall(scene, world, flora);   // aspen leaves letting go in autumn
 leafFall.load();
 const horizon = new HorizonMap(world);

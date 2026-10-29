@@ -171,8 +171,8 @@ const LAYERS = {
     place: `
       float cat = alpine > 0.5 ? 0.0 : (vLush > 0.55 && h2 > 0.4) ? 3.0 : (h3 > 0.55 ? 2.0 : 1.0);
       float pr = fract(h1 * 7.31 + h2 * 3.7);
-      float sz = (0.88 + h3 * 0.3) * mix(1.0, 0.85, alpine);
-      float dens = 1.0;`,
+      float sz = (0.88 + h3 * 0.3) * mix(1.0, 0.85, alpine) * mix(1.0, 0.35, smoothstep(0.3, 0.75, bx.g));   // walked ground wears the tufts down
+      float dens = 1.0 - 0.5 * smoothstep(0.55, 0.9, bx.g);`,
     wind: '1.0', near: '1.0', press: true,
   },
   forbs: {
@@ -183,7 +183,8 @@ const LAYERS = {
       vec2 pf = fract(root / 11.0) - 0.5;
       float edge = 1.0 - smoothstep(0.22, 0.52, length(pf) + (h3 - 0.5) * 0.3);
       float season = 1.0 - 0.75 * smoothstep(0.6, 0.95, uCure);
-      float dens = smoothstep(0.34, 0.62, ph) * edge * season * 0.62 * (1.0 - smoothstep(3900.0, 4100.0, y0));
+      float dens = smoothstep(0.34, 0.62, ph) * edge * season * 0.62 * (1.0 - smoothstep(3900.0, 4100.0, y0))
+        * (0.75 + 0.7 * bx.r) * (1.0 - smoothstep(0.15, 0.5, bx.g));   // damp ground flowers more, a path or a camp not at all
       float cat = alpine > 0.5 ? 0.0 : (vLush > 0.5 || bx.r > 0.4) ? 1.0 : (pid > 0.62 ? 2.0 : (pid < 0.25 ? 0.0 : 1.0));
       float pr = h2 > 0.8 ? ihash(ivec2(pc) + ivec2(99, 5)) : pid;
       float sz = 0.85 + h3 * 0.35;`,
@@ -202,7 +203,7 @@ const LAYERS = {
       float cat = pick < dW ? 2.0 : (pick < dW + dU ? 1.0 : 0.0);
       float pr = fract(h1 * 5.17 + h3 * 2.3);
       float sz = 0.85 + h3 * 0.35;
-      float dens = min(1.0, tot) * (1.0 - cov.r * 0.15);`,
+      float dens = min(1.0, tot) * (1.0 - cov.r * 0.15) * (1.0 - smoothstep(0.12, 0.4, bx.g));   // shrubs do not stand on a path`,
     wind: '0.16', near: '0.0', press: false,
   },
 };
@@ -412,7 +413,7 @@ export class Grass {
         const gap = (a, b) => (a > 0 ? a : b < 0 ? -b : 0);
         const dmin = Math.hypot(gap(lo[0], hi[0]), gap(lo[1], hi[1]));
         const stride = dmin < radius * RING_A + 1 ? 1 : dmin < radius * RING_B + 1 ? 2 : 4;
-        const geo = clumps[stride === 1 ? 3 : 2].clone();
+        const geo = clumps[stride === 1 && layer === 'grass' ? 3 : 2].clone();
         const nv = geo.attributes.position.count;
         geo.setAttribute('aBlock', new THREE.BufferAttribute(new Float32Array(nv * 4).map((_, n) => [i, j, bw, bh][n % 4]), 4));
         geo.setAttribute('aStride', new THREE.BufferAttribute(new Float32Array(nv).fill(stride), 1));
