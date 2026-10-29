@@ -312,6 +312,7 @@ export class Net {
         const others = [...this.remotes.values()].filter((r) => r.id !== id).map((r) => ({ id: r.id, name: r.name, character: r.character }));
         const me = this.me();
         conn.send({ t: 'welcome', players: [{ id: this.peer.id, name: me.name, character: me.character }, ...others], ...this.welcomeInfo() });
+        this.#catchUp(conn);
       }
     } else if (d.t === 'welcome') {
       const hostInfo = d.players.find((p) => p.id === id);
@@ -327,7 +328,25 @@ export class Net {
       if (r) r.ptt = !!d.on;
     } else if (d.t === 'time' && id === idOf(this.code)) {
       this.onTime?.(d);
+    } else if (d.t === 'ev') {
+      this.#apply(id, d.k, d.d);
     }
+  }
+
+  /** Tell everyone what this player just did (a firework, a chop, a fire...). The receivers replay it through the same code. */
+  event(k, data = {}) {
+    if (this.applying || !this.conns.size) return;
+    for (const c of this.conns.values()) if (c.open) c.send({ t: 'ev', k, d: data });
+  }
+
+  #apply(from, k, data) {
+    this.applying = true;
+    try { this.onEvent?.(k, data, this.remotes.get(from)); } catch (e) { console.warn('net event', k, e); } finally { this.applying = false; }
+  }
+
+  /** What the host knows that a newcomer needs (the camp, the fire...): events to replay, from ctx.catchUp(). */
+  #catchUp(conn) {
+    for (const [k, d] of this.catchUp?.() || []) conn.send({ t: 'ev', k, d });
   }
 
   welcomeInfo() { return this.info ? this.info() : {}; }

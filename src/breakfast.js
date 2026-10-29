@@ -134,6 +134,7 @@ export class Breakfast {
     this.mode = 'cooking'; this.cook = 0; this.ready = false;
     this.#sound('lid');
     this.#toast('Bacon and eggs in the skillet. Listen for the sizzle.');
+    this.onAct?.('cook-start');
     return true;
   }
 
@@ -145,6 +146,7 @@ export class Breakfast {
     this.events.push({ type: 'eat', q, label: c < DONE ? 'Barely done' : c < GOOD ? 'Perfectly cooked' : c < BURNT ? 'A little overdone' : 'Burnt black' });
     this.eaten++;
     this.mode = 'off'; this.cook = 0; this.ready = false;
+    this.onAct?.('cook-eat');
     return 'ate';
   }
 

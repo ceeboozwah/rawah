@@ -211,6 +211,7 @@ export class Fishing {
       this.castYaw = Math.atan2(-(spot.x - view.pos.x), -(spot.z - view.pos.z));
       this.state = 'cast'; this.t = 0; this.released = false;
       this.rod.visible = true;
+      this.onAct?.('fish-cast', { x: +spot.x.toFixed(2), z: +spot.z.toFixed(2), level: +spot.level.toFixed(2) });
       return;
     }
     if (this.state === 'cast' || this.state === 'wait' || this.state === 'bite') this.cancel('You reel in.');
@@ -219,10 +220,54 @@ export class Fishing {
   cancel(text) {
     if (this.state === 'idle') return;
     this.state = 'idle';
+    this.onAct?.('fish-end');
     this.rod.visible = this.line.visible = this.bob.visible = this.fish.visible = false;
     this.ui?.classList.add('hidden');
     this.hint = '';
     if (text) this.#toast(text);
+  }
+
+  // ---------------------------------------------------------------- a friend's line
+  /** A friend cast to (x, z) at water `level`, or reeled in (`d` null). Drawn from their hand each frame by `ghostUpdate`. */
+  ghost(id, d) {
+    let g = this.ghosts?.get(id);
+    if (!d) { if (g) { this.scene.remove(g.group); g.line.geometry.dispose(); this.ghosts.delete(id); } return; }
+    if (!this.ghosts) this.ghosts = new Map();
+    if (!g) {
+      const group = new THREE.Group();
+      const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.016, 2.1, 6), new THREE.MeshLambertMaterial({ color: 0x4a3524 }));
+      rod.geometry.translate(0, 1.05, 0);
+      const bob = this.bob.clone();
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(Array.from({ length: 14 }, () => new THREE.Vector3())), new THREE.LineBasicMaterial({ color: 0xe8e8e0, transparent: true, opacity: 0.7 }));
+      line.frustumCulled = false;
+      group.add(rod, bob, line);
+      this.scene.add(group);
+      g = { group, rod, bob, line, t: 0 };
+      this.ghosts.set(id, g);
+    }
+    g.x = d.x; g.z = d.z; g.level = d.level; g.bob.visible = true;
+  }
+
+  ghostUpdate(dt, posOf) {
+    if (!this.ghosts) return;
+    for (const [id, g] of this.ghosts) {
+      const who = posOf(id);
+      if (!who) { g.group.visible = false; continue; }
+      g.group.visible = true; g.t += dt;
+      const hx = who.pos.x - Math.sin(who.yaw) * 0.4 + Math.cos(who.yaw) * 0.28, hz = who.pos.z - Math.cos(who.yaw) * 0.4 - Math.sin(who.yaw) * 0.28, hy = who.pos.y + 1.0;
+      const bx = g.x, bz = g.z, by = g.level + Math.sin(g.t * 2.1) * 0.012;
+      g.bob.position.set(bx, by, bz);
+      const yaw = Math.atan2(-(bx - hx), -(bz - hz));
+      g.rod.position.set(hx, hy, hz); g.rod.rotation.set(0.42, yaw - 0.22, 0, 'YXZ');
+      g.rod.updateMatrixWorld(true);
+      const tip = _a.set(0, 2.1, 0).applyMatrix4(g.rod.matrixWorld);
+      const pos = g.line.geometry.attributes.position, n = pos.count, sag = Math.min(2, tip.distanceTo(_b.set(bx, by + 0.07, bz)) * 0.1);
+      for (let i = 0; i < n; i++) {
+        const u = i / (n - 1);
+        pos.setXYZ(i, tip.x + (bx - tip.x) * u, tip.y + (by + 0.07 - tip.y) * u - Math.sin(Math.PI * u) * sag, tip.z + (bz - tip.z) * u);
+      }
+      pos.needsUpdate = true;
+    }
   }
 
   #toast(text, warn = false) { this.events.push({ type: 'toast', text, warn }); }

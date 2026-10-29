@@ -419,6 +419,18 @@ const net = new Net({
   hasRadio: () => inventory.has('radio'),
   where: () => hiker.pos,
   onTime: (t) => { if (Math.abs((t.day * 24 + t.hour) - (state.day * 24 + state.hour)) > 0.04) { state.hour = t.hour; state.day = t.day; } },
+  // what a friend did, replayed here through the same code (net.applying stops it echoing back)
+  onEvent: (k, d, from) => replayFriend(k, d, from),
+  catchUp: () => {
+    const out = [];
+    if (camp.tent) out.push(['camp-pitch', { ...camp.tent }]);
+    if (camp.fire) out.push(['fire-light', { x: camp.fire.x, z: camp.fire.z, life: camp.fire.life }]);
+    if (coffee.rigged) out.push(['cof-rig']);
+    if (coffee.pot.mode !== 'idle') out.push(['cof-state', { mode: coffee.pot.mode, brew: coffee.pot.brew, left: coffee.pot.left }]);
+    if (breakfast.mode === 'cooking') out.push(['cook-start', { cook: breakfast.cook }]);
+    for (const t of fireworks.tubes) if (t.state === 'idle') out.push(['fw-place', { x: t.x, z: t.z, style: t.style, tx: t.tilt[0], tz: t.tilt[1], yaw: t.mesh.rotation.y }]);
+    return out;
+  },
   onWelcome: (w, code) => {
     if (w.time.doy !== calendar.doy) {
       // the season is built at boot: match the host's and come back to this game
@@ -434,6 +446,31 @@ const net = new Net({
     hud.toast('You are in your friend\'s game. Voices fade with distance.');
   },
 });
+function replayFriend(k, d, from) {
+  const fire = camp.fire;
+  switch (k) {
+    case 'camp-pitch': camp.strike(); camp.pitch(d.x, d.z, d.yaw, d.kind); wood.setCamp(camp.tent); break;
+    case 'camp-strike': camp.strike(); wood.campCount = 0; wood.setCamp(null); break;
+    case 'fire-light': camp.light(d.x, d.z); if (d.life) camp.fire.life = d.life; boxels.dry(d.x, d.z, 0.9, 3); boxels.wear(d.x, d.z, 0.55); crewTalk.smell('smoke', d.x, d.z); break;
+    case 'fire-fuel': camp.addFuel(60); break;
+    case 'fire-douse': camp.douse(); break;
+    case 'cof-rig': if (fire) coffee.rig(fire, fire); break;
+    case 'cof-start': if (coffee.pot.mode === 'idle') coffee.interact(fire || hiker.pos); break;
+    case 'cof-state': Object.assign(coffee.pot, d); break;
+    case 'cof-pour': coffee.pot.left -= d.n; if (coffee.pot.left <= 0) coffee.pot.mode = 'idle'; break;
+    case 'cook-start': if (fire) { breakfast.start(true, fire, fire); if (d?.cook) breakfast.cook = d.cook; } break;
+    case 'cook-eat': breakfast.mode = 'off'; breakfast.cook = 0; breakfast.ready = false; break;
+    case 'fw-place': if (!fireworks.tubes.some((t) => Math.hypot(t.x - d.x, t.z - d.z) < 0.3)) fireworks.put(d.x, d.z, d.style, d.tx, d.tz, d.yaw); break;
+    case 'fw-light': fireworks.lightAt(d.x, d.z); break;
+    case 'fw-pick': fireworks.pickUp({ x: d.x, z: d.z }); break;
+    case 'chop': props.strike({ x: d.ex, z: d.ez }, { pos: { x: d.px, y: 0, z: d.pz }, yaw: d.yaw, tool: d.tool }); break;
+    case 'fish-cast': fishing.ghost(from?.id, d); break;
+    case 'fish-end': fishing.ghost(from?.id, null); break;
+  }
+  // a friend's doings are not messages to you
+  coffee.events.length = 0; breakfast.events.length = 0;
+}
+for (const o of [fireworks, coffee, breakfast, props, fishing]) o.onAct = (k, d) => net.event(k, d);
 if (DEV) editor = new Editor({ renderer, camera, scene, world, flora, placements, keys, toast: (t, k) => hud.toast(t, k), mind });
 if (isTouch) input.enableTouch(document.body);
 const recorder = new Recorder({ canvas: renderer.domElement, audio, hud, pause: () => { if (state.started && !state.paused) pause(true); }, resume: () => pause(false) });
@@ -1001,7 +1038,7 @@ function act() {
   if (state.cut || fishing.locked || atv.riding || state.seat >= 0) return;
   if (pressed.has('KeyC')) {
     if (camp.near(p, 'tent', 4)) {
-      camp.strike(); const kept = wood.packUpCamp(); audio.zip(); hud.toast(kept ? `Camp packed up. ${kept} logs into your pack.` : 'Camp packed up.');
+      camp.strike(); net.event('camp-strike'); const kept = wood.packUpCamp(); audio.zip(); hud.toast(kept ? `Camp packed up. ${kept} logs into your pack.` : 'Camp packed up.');
     } else if (hiker.mode !== 'walk' || !hiker.grounded) {
       hud.toast('Find solid ground first.');
     } else {
@@ -1014,6 +1051,7 @@ function act() {
         camp.strike();
         camp.pitch(x, z, Math.atan2(-fx, -fz), settings.tent);
         wood.setCamp(camp.tent);
+        net.event('camp-pitch', { x, z, yaw: Math.atan2(-fx, -fz), kind: settings.tent });
         party.event('camp');
         audio.zip();
         hud.toast(family ? 'Family tent up: walk in through the screen porch. [Z] inside to sleep.' : 'Tent pitched. [Z] near the tent to sleep.');
@@ -1025,14 +1063,14 @@ function act() {
     if (camp.fire && camp.near(p, 'fire', 5)) {
       // a log on the fire, if you have one; otherwise put it out
       if (wood.available(p) > 0) {
-        if (camp.addFuel(60)) { wood.consume(p, 1); audio.strike(); hud.toast('You lay a log on the fire.'); crewTalk.smell('logsmoke', camp.fire.x, camp.fire.z); }
+        if (camp.addFuel(60)) { net.event('fire-fuel'); wood.consume(p, 1); audio.strike(); hud.toast('You lay a log on the fire.'); crewTalk.smell('logsmoke', camp.fire.x, camp.fire.z); }
         else hud.toast('The fire is roaring already.');
-      } else { camp.douse(); hud.toast('Fire drowned and stirred cold. Nice.'); }
+      } else { camp.douse(); net.event('fire-douse'); hud.toast('Fire drowned and stirred cold. Nice.'); }
     } else {
       const x = p.x + fx * 2, z = p.z + fz * 2;
       const why = camp.fireProblem(x, z) || (wood.available(p) < 3 ? 'You need firewood: three logs. Fell a tree with the axe ([T]) and cut it up.' : null);
       if (why) hud.toast(why, 'warn');
-      else { wood.consume(p, 3); camp.light(x, z); audio.strike(); hud.toast('Fire lit — stools out. [U] to sit · [N] for a marshmallow.'); party.event('fire'); crewTalk.smell('smoke', x, z); boxels.dry(x, z, 0.9, 3); boxels.wear(x, z, 0.55); }
+      else { wood.consume(p, 3); camp.light(x, z); net.event('fire-light', { x, z }); audio.strike(); hud.toast('Fire lit — stools out. [U] to sit · [N] for a marshmallow.'); party.event('fire'); crewTalk.smell('smoke', x, z); boxels.dry(x, z, 0.9, 3); boxels.wear(x, z, 0.55); }
     }
   }
   if (pressed.has('KeyZ') && camp.near(p, 'tent', 4.5) && !state.sleeping) startSleep();
@@ -1948,6 +1986,7 @@ function tick(dt, draw = true) {
   eye.copy(camera.position);
   if (!editor?.active) placements.update(camera);
   net.update(dt, camera);
+  fishing.ghostUpdate(dt, (id) => net.remotes.get(id)?.b);
 
   camera.updateMatrixWorld();
   terrain.update(camera);

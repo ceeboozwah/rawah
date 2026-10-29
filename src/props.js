@@ -129,13 +129,15 @@ export class Props {
   }
 
   /** A swing connected (the hiker's `strike` event with kind chop or slash). */
-  strike(e) {
-    const p = this.hiker.pos, tool = this.tool;
+  strike(e, actor = null) {
+    // a friend's swing, replayed from the network: their position, heading and tool, and none of the personal effects
+    const who = actor || this.hiker, p = who.pos, tool = actor ? actor.tool : this.tool, yaw = who.yaw;
+    if (!actor) this.onAct?.('chop', { px: +p.x.toFixed(2), pz: +p.z.toFixed(2), yaw: +yaw.toFixed(3), ex: e.x, ez: e.z, tool });
     const rx = p.x + e.x * 0.7, rz = p.z + e.z * 0.7;
     const cut = this.#cutNear(rx, rz, 1.35);
     const found = cut ? { kind: cut.kind, x: cut.x, e: cut.e, z: cut.z, s: cut.s, r: cut.r, variant: cut.vi, cut } : this.flora.find(rx, rz, 1.35, [...TREES, ...BRUSH]);
     if (!found) {
-      if (tool === 'axe' && this.wood?.strike(e, this.hiker)) return;   // sawing a lying trunk into firewood
+      if (tool === 'axe' && this.wood?.strike(e, who)) return;   // sawing a lying trunk into firewood
       this.audio.chop?.(false);
       return;
     }
@@ -149,15 +151,15 @@ export class Props {
     const hx = found.x - e.x * 0.3, hz = found.z - e.z * 0.3;
     this.#burst(hx, found.e + (small ? 0.5 : 1.15), hz, -e.x, -e.z, small ? 5 : 8);
     this.audio.chop?.(true, small);
-    this.rig.land(0.5);
+    if (!actor) this.rig.land(0.5);
     let rec = null;
     if (!small) {
-      rec = found.cut || this.#startCut(found, p);
+      rec = found.cut || this.#startCut(found, p, yaw);
       rec.taken = taken;
       this.#carve(rec);
     }
     if (taken < hp) {
-      if (!small && taken > hp * 0.8 && !this.told.has(key)) { this.told.add(key); this.hud.toast('It is starting to lean — stand clear.'); }
+      if (!actor && !small && taken > hp * 0.8 && !this.told.has(key)) { this.told.add(key); this.hud.toast('It is starting to lean — stand clear.'); }
       return;
     }
     this.damage.delete(key);
@@ -167,7 +169,7 @@ export class Props {
       return;
     }
     this.#fell(rec, found.x - p.x, found.z - p.z);
-    this.hud.toast(`Timber! A ${NAME[found.kind]}.`);
+    if (!actor) this.hud.toast(`Timber! A ${NAME[found.kind]}.`);
   }
 
   // ------------------------------------------------------------------ cutting a standing tree
@@ -181,13 +183,13 @@ export class Props {
     return null;
   }
 
-  #startCut(h, from) {
+  #startCut(h, from, yaw) {
     this.flora.take(h);
-    return this.#makeCut(h.kind, h.variant, h.x, h.e, h.z, h.s, h.r, 0, null, from);
+    return this.#makeCut(h.kind, h.variant, h.x, h.e, h.z, h.s, h.r, 0, null, from, yaw);
   }
 
   /** `sides`: [rightX, rightZ, leftX, leftZ], the world directions the two wedges face, or null to work them out from where `from` stands. */
-  #makeCut(kind, vi, x, e, z, s, r, taken, sides, from) {
+  #makeCut(kind, vi, x, e, z, s, r, taken, sides, from, yaw = this.hiker.yaw) {
     const shade = 0.82 + r * 0.3;
     const { mesh } = this.flora.treeMesh(kind, vi, shade);
     mesh.setMatrixAt(0, _m.compose(_p.set(x, e - 0.15, z), _q.setFromAxisAngle(Y, r * Math.PI * 2), _s.setScalar(s)));
@@ -197,7 +199,7 @@ export class Props {
       let ux = from.x - x, uz = from.z - z;
       const l = Math.hypot(ux, uz) || 1;
       ux /= l; uz /= l;
-      const rx = Math.cos(this.hiker.yaw), rz = -Math.sin(this.hiker.yaw), c = Math.cos(1.31), sn = Math.sin(1.31);
+      const rx = Math.cos(yaw), rz = -Math.sin(yaw), c = Math.cos(1.31), sn = Math.sin(1.31);
       sides = [ux * c + rx * sn, uz * c + rz * sn, ux * c - rx * sn, uz * c - rz * sn];
     }
     const rec = { key: itemKey(kind, x, z), kind, vi, x, e, z, s, r, taken, sides, mesh, geo: null };
@@ -239,7 +241,7 @@ export class Props {
     if (log) { mesh.geometry = log; geo?.dispose(); geo = log; this.#makeStump(kind, vi, x, e, z, s, r, rec.sides); }
     else this.#stump(x, e, z, s);
     const shade = 0.82 + r * 0.3, height = src.boundingBox.max.y;
-    const a = Math.atan2(dz, dx) + (Math.random() - 0.5) * 0.5, lift = log ? CUT_H : 0;
+    const a = Math.atan2(dz, dx) + (((Math.sin(x * 12.9898 + z * 78.233) * 43758.5453) % 1 + 1) % 1 - 0.5) * 0.5, lift = log ? CUT_H : 0;
     this.falling.push({ mesh, geo, kind, vi, x, y: e - 0.15, lift, z, s, r, shade, yaw: a, t: 0, dur: clamp(1.7 + height * s * 0.055, 2.1, 3.4), H: height * s - lift });
   }
 

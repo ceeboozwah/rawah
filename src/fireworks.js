@@ -457,14 +457,20 @@ export class Fireworks {
     const x = p.x - Math.sin(yaw) * ahead, z = p.z - Math.cos(yaw) * ahead, w = this.world;
     if (w.lakeAt(x, z) || w.localGrade(x, z) > 0.7) return 'Too steep or too wet to stand a tube.';
     if (this.tubes.some((t) => Math.hypot(t.x - x, t.z - z) < 0.36)) return 'There is already one there: step along.';
-    const mesh = tubeMesh(this.style);
-    const y = w.height(x, z), tx = rnd(-0.08, 0.08), tz = rnd(-0.08, 0.08);
-    mesh.position.set(x, y - 0.01, z);
-    mesh.rotation.set(tx, rnd(0, 6.28), tz, 'YXZ');
-    this.scene.add(mesh);
-    this.tubes.push({ x, y, z, mesh, state: 'idle', style: this.style, tilt: [tx, tz], burn: 0, hiss: 0, catchAt: Infinity, paper: this.style });
-    this.events.push({ type: 'sound', name: 'clunk', v: 0.6 });
+    this.put(x, z, this.style, rnd(-0.08, 0.08), rnd(-0.08, 0.08), rnd(0, 6.28));
+    this.onAct?.('fw-place', { x, z, style: this.style, tx: this.last.tilt[0], tz: this.last.tilt[1], yaw: this.last.mesh.rotation.y });
     return null;
+  }
+
+  /** Stand a tube at (x, z); also what a friend's tube becomes on your screen. */
+  put(x, z, style, tx = 0, tz = 0, yaw = 0) {
+    const mesh = tubeMesh(style), y = this.world.height(x, z);
+    mesh.position.set(x, y - 0.01, z);
+    mesh.rotation.set(tx, yaw, tz, 'YXZ');
+    this.scene.add(mesh);
+    this.last = { x, y, z, mesh, state: 'idle', style, tilt: [tx, tz], burn: 0, hiss: 0, catchAt: Infinity, paper: style };
+    this.tubes.push(this.last);
+    this.events.push({ type: 'sound', name: 'clunk', v: 0.6 });
   }
 
   /** Light the fuse of the tube nearest the point you are aiming at. */
@@ -478,8 +484,15 @@ export class Fireworks {
     }
     if (!best) return false;
     this.#ignite(best);
+    this.onAct?.('fw-light', { x: best.x, z: best.z });
     this.events.push({ type: 'toast', text: 'Fuse lit. Stand back and look up.' });
     return true;
+  }
+
+  /** A friend lit the tube at (x, z). */
+  lightAt(x, z) {
+    const t = this.tubes.find((o) => o.state === 'idle' && Math.hypot(o.x - x, o.z - z) < 0.3);
+    if (t) this.#ignite(t);
   }
 
   #ignite(t) {
@@ -504,6 +517,7 @@ export class Fireworks {
       this.scene.remove(t.mesh); t.mesh.traverse((o) => o.geometry?.dispose());
       this.tubes.splice(i, 1); n++;
     }
+    if (n) this.onAct?.('fw-pick', { x: p.x, z: p.z });
     return n;
   }
 

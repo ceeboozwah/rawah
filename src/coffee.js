@@ -193,6 +193,7 @@ export class Coffee {
     this.#sound('lid');
     if (this.pot.mode === 'idle') { this.pot.mode = 'brewing'; this.pot.brew = 0; this.pot.left = 0; this.#toast('Grate and percolator on the fire. It will chime when the coffee is done.'); }
     else this.#toast('Grate and percolator back on the fire.');
+    this.onAct?.('cof-rig');
     return true;
   }
 
@@ -204,6 +205,7 @@ export class Coffee {
       pot.mode = 'brewing'; pot.brew = 0; pot.left = 0;
       this.#sound('lid');
       this.#toast('Water and grounds in. It will perk for a bit, and chime when it is done.');
+      this.onAct?.('cof-start');
       return 'started';
     }
     if (pot.mode === 'brewing') { this.#toast(`Still perking… ${Math.round(pot.brew * 100)}%`); return 'wait'; }
@@ -301,6 +303,7 @@ export class Coffee {
       const had = this.cup.sips;
       this.cup.heat = (this.cup.heat * had + pot.heat * n) / Math.max(1, had + n);
       this.cup.sips += n; pot.left -= n;
+      this.onAct?.('cof-pour', { n });
       this.#toast(`Poured ${n} sip${n > 1 ? 's' : ''} into your thermos · ${this.cup.sips}/${CAP}. [O] to sip.`);
       if (pot.left <= 0) { pot.mode = 'idle'; pot.heat = Math.min(pot.heat, 0.6); this.#toast('The pot is empty. [U] brews another.'); }
     }
