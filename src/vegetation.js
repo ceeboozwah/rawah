@@ -22,15 +22,3 @@ export async function loadVegetation(base = './assets/vegetation/') {
     return out;
   } catch (e) { console.warn('vegetation cut-outs failed to load; using the painted grass', e); return null; }
 }
-
-/** The streamside plants (tools/cut_streamside.py): willow thickets, sedge clumps and yellow and white wildflowers, one atlas. */
-export async function loadStreamside(base = './assets/vegetation/') {
-  try {
-    const [meta, tex] = await Promise.all([fetch(base + 'bank.json').then((r) => r.json()), new THREE.TextureLoader().loadAsync(base + 'bank.webp')]);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = 4;
-    tex.minFilter = THREE.LinearMipmapLinearFilter;
-    tex.generateMipmaps = true;
-    return { meta, tex };
-  } catch (e) { console.warn('streamside plants failed to load', e); return null; }
-}
