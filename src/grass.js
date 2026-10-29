@@ -206,6 +206,45 @@ const LAYERS = {
       float dens = min(1.0, tot) * (1.0 - cov.r * 0.15) * (1.0 - smoothstep(0.12, 0.4, bx.g));   // shrubs do not stand on a path`,
     wind: '0.16', near: '0.0', press: false,
   },
+  // streamside layers (tools/cut_streamside.py): they read `streamEdge`, the distance from the water's edge that channels.js
+  // writes beside every stream, so they hug the banks: a fringe of sedge at the water, willow thickets in patches a little back,
+  // wet-meadow wildflowers beyond
+  bankSedge: {
+    grow: '(1.0 - cov.a)', frag: 'grass', cards3: true,
+    place: `
+      float se = streamEdge(root);
+      float cat = 0.0;
+      float pr = fract(h1 * 7.31 + h2 * 3.7);
+      float sz = 0.85 + h3 * 0.4;
+      float dens = smoothstep(0.0, 0.3, se) * (1.0 - smoothstep(2.8, 6.0, se)) * (0.7 + 0.3 * ihash(ivec2(floor(root / 2.2)) + ivec2(5, 9))) * 1.4
+        * (1.0 - smoothstep(3600.0, 3800.0, y0)) * (1.0 - smoothstep(0.2, 0.6, bx.g));`,
+    wind: '0.8', near: '0.8', press: true,
+  },
+  bankWillow: {
+    grow: '(1.0 - cov.a)', frag: 'shrubs',
+    place: `
+      float se = streamEdge(root);
+      float zone = ihash(ivec2(floor(root / 8.0)) + ivec2(3, 17));
+      float cat = 1.0;
+      float pr = fract(h1 * 5.17 + h3 * 2.3);
+      float sz = 0.85 + h3 * 0.35;
+      float dens = smoothstep(0.38, 0.62, zone) * smoothstep(0.3, 1.0, se) * (1.0 - smoothstep(5.0, 10.0, se)) * 1.1
+        * (1.0 - smoothstep(3500.0, 3700.0, y0)) * (1.0 - smoothstep(0.2, 0.6, bx.g));`,
+    wind: '0.16', near: '0.0', press: false,
+  },
+  bankFlower: {
+    grow: '(1.0 - cov.a)', frag: 'forbs',
+    place: `
+      float se = streamEdge(root);
+      float zone = ihash(ivec2(floor(root / 6.0)) + ivec2(11, 4));
+      float cat = 2.0;
+      float pr = h2 > 0.75 ? fract(zone * 13.7) : fract(zone * 7.3);
+      float sz = 0.85 + h3 * 0.35;
+      float season = 1.0 - 0.75 * smoothstep(0.6, 0.95, uCure);
+      float dens = smoothstep(0.3, 0.55, zone) * smoothstep(0.6, 2.0, se) * (1.0 - smoothstep(6.0, 11.0, se)) * season * 1.0
+        * (1.0 - smoothstep(3600.0, 3800.0, y0)) * (1.0 - smoothstep(0.15, 0.5, bx.g));`,
+    wind: '0.55', near: '0.6', press: true,
+  },
 };
 
 const BLOCKS = 6;   // the clump grid is drawn as BLOCKS x BLOCKS pieces so the ones off screen can be skipped
@@ -233,7 +272,7 @@ export class Grass {
       const pl = veg.meta.plants, tab = Array.from({ length: 64 }, (_, i) => (pl[i] ? new THREE.Vector4(pl[i].x, pl[i].y, pl[i].cardW, pl[i].cardH) : new THREE.Vector4()));
       const cats = Array.from({ length: 4 }, (_, i) => { const c = Object.values(veg.meta.cats)[i] || [0, 0]; return new THREE.Vector4(c[0], c[1], 0, 0); });
       Object.assign(this.uniforms, { uPlants: { value: tab }, uCats: { value: cats }, uAtlas: { value: new THREE.Vector2(veg.meta.cols, veg.meta.rows) } });
-      this.pad0 = Math.max(2.2, ...pl.map((p) => p.cardW)) * (layer === 'grass' ? 1.4 : 1.1);
+      this.pad0 = Math.max(2.2, ...pl.map((p) => p.cardW)) * (layer === 'grass' || layer === 'bankSedge' ? 1.4 : 1.1);
     }
     const clumps = { 3: clumpGeometry(3), 2: clumpGeometry(2) };
     const mat = new THREE.MeshLambertMaterial({ map: veg ? veg.tex : paintGrass(), alphaTest: 0.42, alphaToCoverage: true, side: THREE.DoubleSide });
@@ -369,12 +408,12 @@ export class Grass {
           vec3 photo = gs.rgb * 0.85;
           float lum = dot(photo, vec3(0.3, 0.59, 0.11));
           vec3 col; float shade;
-          ${layer === 'grass' ? `
+          ${(L.frag || layer) === 'grass' ? `
           float alive = step(uCure - vLush * 0.35, vR);
           vec3 straw = vec3(0.62, 0.48, 0.26) * (lum * 1.9 + 0.05) * vTone;
           col = mix(straw, photo, alive);
           col *= mix(vec3(1.0), clamp(vSat * 2.0, 0.6, 1.3), 0.22);
-          shade = mix(0.55, 1.0, smoothstep(0.0, 0.42, vT));` : layer === 'forbs' ? `
+          shade = mix(0.55, 1.0, smoothstep(0.0, 0.42, vT));` : (L.frag || layer) === 'forbs' ? `
           float dry = smoothstep(0.62, 0.95, uCure) * (0.6 + 0.4 * fract(vR * 9.7));
           vec3 straw = vec3(0.5, 0.4, 0.24) * (lum * 1.8 + 0.04);
           col = mix(photo, straw, dry * 0.85);
@@ -413,7 +452,7 @@ export class Grass {
         const gap = (a, b) => (a > 0 ? a : b < 0 ? -b : 0);
         const dmin = Math.hypot(gap(lo[0], hi[0]), gap(lo[1], hi[1]));
         const stride = dmin < radius * RING_A + 1 ? 1 : dmin < radius * RING_B + 1 ? 2 : 4;
-        const geo = clumps[stride === 1 && layer === 'grass' ? 3 : 2].clone();
+        const geo = clumps[stride === 1 && (layer === 'grass' || L.cards3) ? 3 : 2].clone();
         const nv = geo.attributes.position.count;
         geo.setAttribute('aBlock', new THREE.BufferAttribute(new Float32Array(nv * 4).map((_, n) => [i, j, bw, bh][n % 4]), 4));
         geo.setAttribute('aStride', new THREE.BufferAttribute(new Float32Array(nv).fill(stride), 1));

@@ -27,18 +27,20 @@ export const CHANNEL_GLSL = /* glsl */ `
 uniform highp sampler2D uChTex;
 uniform vec2 uChOrg;
 uniform float uChOn;
-float chCell(ivec2 c) {
-  if (c.x < 0 || c.y < 0 || c.x >= 1024 || c.y >= 1024) return 1e4;
-  return texelFetch(uChTex, c, 0).r;
+vec2 chCell(ivec2 c) {
+  if (c.x < 0 || c.y < 0 || c.x >= 1024 || c.y >= 1024) return vec2(1e4);
+  return texelFetch(uChTex, c, 0).rg;
 }
-float streamAt(vec2 xz) {
-  if (uChOn < 0.5) return 1e4;
+vec2 streamBoth(vec2 xz) {
+  if (uChOn < 0.5) return vec2(1e4);
   vec2 u = (xz - uChOrg) / 0.5 - 0.5;
   vec2 c = floor(u), f = u - c;
   ivec2 i = ivec2(c);
-  float a = chCell(i), b = chCell(i + ivec2(1, 0)), d = chCell(i + ivec2(0, 1)), e = chCell(i + ivec2(1, 1));
+  vec2 a = chCell(i), b = chCell(i + ivec2(1, 0)), d = chCell(i + ivec2(0, 1)), e = chCell(i + ivec2(1, 1));
   return mix(mix(a, b, f.x), mix(d, e, f.x), f.y);
 }
+float streamAt(vec2 xz) { return streamBoth(xz).x; }
+float streamEdge(vec2 xz) { return streamBoth(xz).y; }   // metres from the water's edge: the bank plants read it
 float chanMin(float a, float b) {
   float h = max(${SMIN.toFixed(2)} - abs(a - b), 0.0) / ${SMIN.toFixed(2)};
   return min(a, b) - h * h * ${(SMIN * 0.25).toFixed(4)};
@@ -54,10 +56,10 @@ const hash = (n) => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return
 export class Channels {
   constructor(world) {
     this.world = world;
-    this.data = new Float32Array(CH_N * CH_N).fill(NONE);
+    this.data = new Float32Array(CH_N * CH_N * 2).fill(NONE);     // R the channel surface, G the distance from the water's edge (negative in the water)
     this.org = { x: 0, z: 0 };
     this.has = false;
-    this.tex = new THREE.DataTexture(this.data, CH_N, CH_N, THREE.RedFormat, THREE.FloatType);
+    this.tex = new THREE.DataTexture(this.data, CH_N, CH_N, THREE.RGFormat, THREE.FloatType);
     this.tex.magFilter = this.tex.minFilter = THREE.NearestFilter;
     this.tex.generateMipmaps = false;
     this.tex.needsUpdate = true;
@@ -170,8 +172,10 @@ export class Channels {
         let prof;
         if (dist < wv) { const q = dist / wv; prof = wy - DEPTH - SCOOP * (1 - q * q); }
         else { const x = dist - wv; prof = wy - DEPTH + SLOPE * x + FLARE * x * x; }
-        const k = r * CH_N + c;
+        const k = (r * CH_N + c) * 2;
         if (prof < d[k]) d[k] = prof;
+        const edge = dist - (wv + 1.05 * DEPTH / SLOPE);
+        if (edge < d[k + 1]) d[k + 1] = edge;
       }
     }
   }
@@ -181,7 +185,7 @@ export class Channels {
     if (!this.has) return NONE;
     const ux = (x - this.org.x) / CH_C - 0.5, uz = (z - this.org.z) / CH_C - 0.5;
     const cx = Math.floor(ux), cz = Math.floor(uz), fx = ux - cx, fz = uz - cz;
-    const g = (c, r) => (c < 0 || r < 0 || c >= CH_N || r >= CH_N ? NONE : this.data[r * CH_N + c]);
+    const g = (c, r) => (c < 0 || r < 0 || c >= CH_N || r >= CH_N ? NONE : this.data[(r * CH_N + c) * 2]);
     const a = g(cx, cz), b = g(cx + 1, cz), e = g(cx, cz + 1), f = g(cx + 1, cz + 1);
     return (a + (b - a) * fx) * (1 - fz) + (e + (f - e) * fx) * fz;
   }

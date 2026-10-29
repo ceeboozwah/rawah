@@ -28,7 +28,7 @@ import { Guide } from './guide.js';
 import { TOOL_NAME } from './tools.js';
 import { clamp, smoothstep, lerp } from './noise.js';
 import { Grass } from './grass.js';
-import { loadVegetation } from './vegetation.js';
+import { loadVegetation, loadStreamside } from './vegetation.js';
 import { Boxels } from './boxels.js';
 import { updateAtmosphere, atmosphere } from './atmosphere.js';
 import { Weather, REGIMES } from './weather.js';
@@ -243,6 +243,11 @@ fishing.onRipple = (x, z, size) => { waves.drop(x, z, 0.2 + 0.16 * size, 0.006 +
 const roast = new Roast(scene);
 scene.add(grass.mesh);
 if (forbs) scene.add(forbs.mesh, shrubs.mesh);
+// the streamside plants: sedge along the water, willow thickets and wildflowers on the banks (on from medium up)
+const bankAtlas = Q.grass.radius >= 30 ? await loadStreamside() : null;
+const bankScale = Q.grass.radius >= 50 ? 1 : 0.7;
+const bankLayers = bankAtlas ? [['bankSedge', 30, 0.42], ['bankFlower', 34, 0.7], ['bankWillow', 60, 1.1]].map(([layer, r, sp]) => new Grass(terrain, { radius: r * bankScale, spacing: sp, layer, veg: bankAtlas, shared: grass }, flora.uniforms)) : [];
+for (const l of bankLayers) scene.add(l.mesh);
 const boxels = new Boxels(world, { n: 512 });
 BOXEL.value = boxels.texture;
 let bxLast = null, bxAcc = 0, bxRain = 0;
@@ -1919,6 +1924,7 @@ function tick(dt, draw = true) {
   const frost = clamp((1.5 - tC) / 4, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0);
   grass.update(camera, hiker, frost, calendar.cure, avatar.heading, renderer);
   if (forbs) { forbs.follow(camera, hiker, frost, calendar.cure); shrubs.follow(camera, hiker, frost, calendar.cure); }
+  for (const l of bankLayers) l.follow(camera, hiker, frost, calendar.cure);
   // the ground remembers: footsteps wear it, rain wets it, sun dries it —
   // every event's certified cone decides which cells the sim may skip
   if (live) {
@@ -2018,7 +2024,7 @@ function tick(dt, draw = true) {
   perf.frame++;
   renderer.shadowMap.needsUpdate = settings.shadows && (perf.frame % 2 === 0 || !!state.travel || !!state.intro);
   if (draw) {
-    mirror.update({ scene, camera, hide: [lakes.group, streams.group, grass.mesh, ...(forbs ? [forbs.mesh, shrubs.mesh] : []), shafts.mesh, leafFall.meshes[0], leafFall.meshes[1], leafFall.meshes[2], leafFall.meshes[3]], atmosphere: (cam) => updateAtmosphere(sky, cam), enabled: settings.mirror && QUALITY !== 'low' && !Q.logDepth });
+    mirror.update({ scene, camera, hide: [lakes.group, streams.group, grass.mesh, ...(forbs ? [forbs.mesh, shrubs.mesh] : []), ...bankLayers.map((l) => l.mesh), shafts.mesh, leafFall.meshes[0], leafFall.meshes[1], leafFall.meshes[2], leafFall.meshes[3]], atmosphere: (cam) => updateAtmosphere(sky, cam), enabled: settings.mirror && QUALITY !== 'low' && !Q.logDepth });
     renderer.render(scene, camera);
   }
 }
@@ -2064,7 +2070,7 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, fields, hydration, gear, inventory, forbs, shrubs, invUI, smokeCol, flare,
+    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, fields, hydration, gear, inventory, forbs, shrubs, bankLayers, invUI, smokeCol, flare,
     benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, hiker, rig, avatar, party, route, gmap: map, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },
