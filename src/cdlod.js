@@ -3,6 +3,7 @@ import { NOISE_GLSL, RELIEF_GLSL } from './detail.js';
 import { ALBEDO, ALBEDO_UNIFORMS, albedoUniforms, WORLEY_GLSL, NEAR_NORMAL, NEAR_COLOR, BOXEL_COLOR } from './terrain.js';
 import { withAtmosphere } from './atmosphere.js';
 import { Sculpt, SCULPT_GLSL, LIMIT } from './sculpt.js';
+import { Channels, CHANNEL_GLSL } from './channels.js';
 import { CULL } from './culling.js';
 
 // Continuous distance-dependent level of detail (CDLOD, after Strugar 2010).
@@ -69,13 +70,15 @@ float baseH(vec2 xz) {
   return ha + f.y * (hb - ha) + f.x * (hc - hb);
 }
 ${SCULPT_GLSL}
+${CHANNEL_GLSL}
 float maskAt(vec2 xz) { return texture2D(uMask, (xz / uCell + uN * 0.5 + 0.5) / uN).r; }
 float rockAt(vec2 xz) { return texture2D(uCover, xz / uExtent + 0.5).a; }
 ${NOISE_GLSL}
 ${RELIEF_GLSL}
 float groundH(vec2 xz, float spacing) {
   float rock = rockAt(xz);
-  return baseH(xz) + relief(xz, reliefAmp(rock, maskAt(xz)), rock, spacing) + editH(xz);
+  float g = baseH(xz) + relief(xz, reliefAmp(rock, maskAt(xz)), rock, spacing) + editH(xz);
+  return chanMin(g, streamAt(xz));   // streams are dug in (channels.js)
 }
 `;
 
@@ -100,8 +103,9 @@ export class CDLODTerrain {
     maskTex.needsUpdate = true;
 
     this.sculpt = world.sculpt = new Sculpt(world);
+    this.channels = world.channels = new Channels(world);
     this.uniforms = {
-      ...this.sculpt.uniforms,
+      ...this.sculpt.uniforms, ...this.channels.uniforms,
       uHeight: { value: heightTex }, uMask: { value: maskTex },
       uN: { value: N }, uCell: { value: world.cell }, uHScale: { value: world.hScale }, uHOffset: { value: world.hOffset },
       uRanges: { value: this.ranges }, uGrid: { value: GRID }, uCam: { value: new THREE.Vector3() },
@@ -120,6 +124,7 @@ export class CDLODTerrain {
           uniform vec3 uCam;
           uniform sampler2D uCover;
           varying vec3 vWPos;
+          varying vec2 vChG;
           ${HEIGHT_GLSL}`)
         .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = vec3(0.0, 1.0, 0.0);')
         .replace('#include <begin_vertex>', `
@@ -137,10 +142,16 @@ export class CDLODTerrain {
           wxz = nodeA.xy + g * size;
           float spacing = size / uGrid * (1.0 + morph);
           vec3 transformed = vec3(wxz.x, groundH(wxz, spacing), wxz.y);
-          vWPos = transformed;`);
+          vWPos = transformed;
+          vChG = vec2(0.0);
+          if (uChOn > 0.5 && streamAt(wxz) < 5000.0) {   // the slope of the bank, for the fragment's normal
+            float ce = 0.35;
+            vChG = vec2(chanCut(wxz + vec2(ce, 0.0)) - chanCut(wxz - vec2(ce, 0.0)), chanCut(wxz + vec2(0.0, ce)) - chanCut(wxz - vec2(0.0, ce))) / (2.0 * ce);
+          }`);
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `#include <common>
           varying vec3 vWPos;
+          varying vec2 vChG;
           ${ALBEDO_UNIFORMS}
           ${HEIGHT_GLSL}
           ${WORLEY_GLSL}`)
@@ -164,6 +175,7 @@ export class CDLODTerrain {
             gx += ex; gz += ez;
             editSlope = length(vec2(ex, ez));
           }
+          gx += vChG.x; gz += vChG.y;   // the bank you are standing on (from the vertex shader: no sampler of its own here)
           vec3 wn = normalize(vec3(-gx, 1.0, -gz));
           float mtnW = 0.0;
           #ifdef NEAR_DETAIL
@@ -300,6 +312,7 @@ export class CDLODTerrain {
   update(camera) {
     this.cam = camera.position;
     this.uniforms.uCam.value.copy(camera.position);
+    this.channels.update(camera.position.x, camera.position.z);
     this._pm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     this.frustum.setFromProjectionMatrix(this._pm);
     for (const g of this.geos) g.instanceCount = 0;

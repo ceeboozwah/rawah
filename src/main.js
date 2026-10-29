@@ -194,7 +194,8 @@ function currentAt(x, z) {
     let dx = s.bx - s.ax, dz = s.bz - s.az;
     if (s.ay < s.by) { dx = -dx; dz = -dz; }   // downhill
     const l = Math.hypot(dx, dz) || 1;
-    _flow.x = dx / l * 0.55; _flow.z = dz / l * 0.55;
+    const run = l || 1, sp = Math.min(1.1, Math.max(0.2, 0.18 + 4.5 * Math.pow(Math.max(0, Math.abs(s.ay - s.by) / run), 0.8)));   // from the stream's own slope
+    _flow.x = dx / l * sp; _flow.z = dz / l * sp;
   }
   return _flow;
 }
@@ -226,7 +227,7 @@ const weather = new Weather();
 weather.override = REGIMES[settings.weather] ? settings.weather : null;
 const precip = new Precip(Q.precip);
 scene.add(precip.mesh);
-const veg = new URLSearchParams(location.search).has('noveg') ? null : await loadVegetation();     // the cut-out grasses, wildflowers and shrubs (tools/cut_vegetation.py)
+const veg = new URLSearchParams(location.search).has('veg') ? await loadVegetation() : null;     // the cut-out grasses, wildflowers and shrubs (tools/cut_vegetation.py): off for now, `?veg` turns them on     // the cut-out grasses, wildflowers and shrubs (tools/cut_vegetation.py)
 flora.noWillow = !!veg && Q.grass.radius >= 30;                  // the willow thickets are the shrub layer's now
 const grass = new Grass(terrain, { ...Q.grass, veg: veg && veg.grass }, flora.uniforms);
 const VEGQ = Q.grass.radius >= 50 ? { f: [26, 1.0], s: [64, 3.0] } : Q.grass.radius >= 30 ? { f: [18, 1.2], s: [44, 3.2] } : null;   // wildflower and shrub layers by preset; off on low

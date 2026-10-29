@@ -550,7 +550,7 @@ export function buildStreams(world) {
         // the current carries the surface detail downstream; wind chop and rain ride on top
         vec2 fl = normalize(vFlow + vec2(1e-4));
         float fade = exp(-length(vViewPosition) * 0.02);
-        vec2 amb = flowDetail(uFlowMap, vWaveXZ, uWT, fl, 1.15) * 1.25 + windSea(vWaveXZ, uWT) * 0.7 + rainRings(vWaveXZ, uWT, uRainAmt);
+        vec2 amb = flowDetail(uFlowMap, vWaveXZ, uWT, fl, length(vFlow)) * 1.25 + windSea(vWaveXZ, uWT) * 0.7 + rainRings(vWaveXZ, uWT, uRainAmt);
         // riffles: where the surface is busiest the water picks up a little white
         diffuseColor.rgb += vec3(0.55) * smoothstep(0.28, 0.75, length(amb)) * 0.35 * fade;
         vec2 wavePush = -waveSlope(vWaveXZ) * uWaveGain - amb * fade;
@@ -564,7 +564,7 @@ export function buildStreams(world) {
   };
   const group = new THREE.Group(), geos = [];
   for (const st of world.streams) {
-    const p = st.pts, half = st.width / 2;
+    const p = st.pts, half = st.hw || st.width / 2;
     const pos = new Float32Array(p.length * 6), uv = new Float32Array(p.length * 4), flow = new Float32Array(p.length * 4);
     const down = p[0][2] >= p[p.length - 1][2] ? 1 : -1;   // points are listed downstream when the first is higher
     let along = 0;
@@ -576,9 +576,10 @@ export function buildStreams(world) {
       if (i) along += Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]);
       for (let s = 0; s < 2; s++) {
         const sign = s ? 1 : -1, k = (i * 2 + s) * 3;
-        flow[(i * 2 + s) * 2] = dx * down; flow[(i * 2 + s) * 2 + 1] = dz * down;
+        const spd = st.speed ? st.speed[i] : 0.5;
+        flow[(i * 2 + s) * 2] = dx * down * spd; flow[(i * 2 + s) * 2 + 1] = dz * down * spd;
         pos[k] = p[i][0] + dz * half * sign; pos[k + 1] = p[i][2]; pos[k + 2] = p[i][1] - dx * half * sign;
-        uv[(i * 2 + s) * 2] = along / 3; uv[(i * 2 + s) * 2 + 1] = s * st.width / 3;
+        uv[(i * 2 + s) * 2] = along / 3; uv[(i * 2 + s) * 2 + 1] = s * half * 2 / 3;
       }
     }
     const idx = [];
@@ -593,7 +594,7 @@ export function buildStreams(world) {
   }
   const chunks = new ChunkSet(mergeGeometries(geos), mat, CHUNK_M, (m) => { m.renderOrder = 1; });
   group.add(chunks.group);
-  return { group, chunks, update(t) { normalMap.offset.set(-t * 0.5, Math.sin(t * 0.7) * 0.05); } };
+  return { group, chunks, update(t) { normalMap.offset.set(-t * 0.04, Math.sin(t * 0.3) * 0.02); } };
 }
 
 /** The two cars, nose to tail along the road. Anyone can drive either. */
