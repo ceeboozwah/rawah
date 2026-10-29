@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Character, CHARACTERS } from './character.js';
 import { ACTIONS } from './hiker.js';
+import { buildRadio } from './gear.js';
 
 // Playing together, in the browser. One person starts a shared game and gets a six-character code; friends open the game, pick
 // their hiker on the title screen, type the code and appear in the same valley. Everyone is connected to everyone (a mesh, fine
@@ -15,7 +16,8 @@ import { ACTIONS } from './hiker.js';
 //           name above its head; its position is eased between packets.
 //  VOICE    the microphone (getUserMedia: the browser asks the player; refused, the player can still listen) goes out as a
 //           WebRTC audio call. Each incoming voice is placed in the world with a panner at that hiker, full volume within 6 m and
-//           fading to nothing at 150 m, or at full volume everywhere in radio mode. A friend who is talking lights their name.
+//           fading to nothing at 150 m. With a handheld radio in the pack, a friend who holds the push-to-talk button is also heard over the
+//           radio from far away (see RADIO below). A friend who is talking lights their name.
 //  NOT SHARED  the world is each browser's own copy: time and weather are the host's, but felled trees, fires, tents and
 //           sculpted ground are not. The browsers need a way to reach each other (public STUN only: some strict networks would
 //           need a TURN relay), and the microphone needs https or localhost.
@@ -29,7 +31,29 @@ const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 export const PUBLIC_URL = 'https://ceeboozwah.github.io/rawah/';
 const isLocal = () => /^(localhost|127\.|\[::1\]|10\.|192\.168\.)/.test(location.hostname) || location.hostname.endsWith('.local');
 export const inviteLink = (code) => `${isLocal() ? PUBLIC_URL : `${location.origin}${location.pathname}`}?join=${code}`;
-const RATE = 0.1;                  // seconds between state packets
+const RATE = 0.1;
+const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+// ---- the handheld radio
+// A radio carries a voice a long way, so it reaches where the proximity voice has faded away: up to about 7 km, clear inside 1.2 km,
+// quieter and hissier past that, and half as strong with a ridge in the way. It sounds like one: the voice is squeezed into the
+// 380 to 3000 Hz a small speaker gives, lifted in the mids, pushed through a light tanh clipper and a fast compressor, with a hiss
+// under it that grows as the signal weakens, a click when the other person keys up, and a squelch tail and a beep when they let go.
+const RADIO = { near: 12, clear: 1200, far: 7000, band: [380, 3000] };
+const driveCurve = (k) => { const c = new Float32Array(2048); for (let i = 0; i < c.length; i++) { const x = (i / (c.length - 1)) * 2 - 1; c[i] = Math.tanh(k * x) / Math.tanh(k); } return c; };
+
+/** The radio's voice processing: input -> speaker band -> mids -> clipper -> compressor -> output. */
+export function radioChain(ctx) {
+  const input = ctx.createGain(); input.gain.value = 1.6;
+  const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = RADIO.band[0]; hp.Q.value = 0.8;
+  const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = RADIO.band[1]; lp.Q.value = 0.9;
+  const pk = ctx.createBiquadFilter(); pk.type = 'peaking'; pk.frequency.value = 1800; pk.gain.value = 4; pk.Q.value = 0.9;
+  const ws = ctx.createWaveShaper(); ws.curve = driveCurve(1.5); ws.oversample = '2x';
+  const cmp = ctx.createDynamicsCompressor(); cmp.threshold.value = -24; cmp.knee.value = 10; cmp.ratio.value = 5; cmp.attack.value = 0.003; cmp.release.value = 0.12;
+  const output = ctx.createGain(); output.gain.value = 0.55;
+  input.connect(hp); hp.connect(lp); lp.connect(pk); pk.connect(ws); ws.connect(cmp); cmp.connect(output);
+  return { input, output };
+}                  // seconds between state packets
 const RANGE = { full: 6, none: 150 };
 
 class Body {
@@ -85,6 +109,7 @@ class Remote {
     this.label = makeLabel(this.name);
     net.scene.add(this.label.sprite);
     this.speaking = false; this.voice = null; this.lastAct = -1;
+    this.ptt = false; this.radioObj = null; this.sig = { q: 0, d: 0, next: 0 };
   }
 
   /** The newest state packet. */
@@ -112,6 +137,9 @@ class Remote {
     b.wallUp.x = t.wx; b.wallUp.y = t.wy; b.emote = t.em || '';
     if (b.action) { b.action.t += dt; if (b.action.t >= b.action.dur) b.action = null; }
     if (this.char.tool !== t.tl && t.tl) this.char.setTool(t.tl);
+    // a friend talking on the radio holds it up
+    if (this.ptt && !this.radioObj) this.radioObj = buildRadio();
+    this.char.setItem?.(this.ptt ? this.radioObj : null);
     this.char.update(dt, b);
     this.label.sprite.position.set(b.pos.x, b.pos.y + 2.25, b.pos.z);
     this.label.draw(this.speaking, false);
@@ -140,7 +168,7 @@ export class Net {
     this.remotes = new Map();     // peer id -> Remote
     this.pending = new Map();     // peer id -> voice stream that arrived before the hello
     this.stream = null; this.audio = null;
-    this.micOn = false; this.micError = ''; this.radio = false;
+    this.micOn = false; this.micError = ''; this.ptt = false; this.noise = null;
     this.acc = 0; this.timeAcc = 0; this.actId = 0; this.lastAct = null;
     this.listeners = new Set();
     this.#ui();
@@ -243,7 +271,7 @@ export class Net {
     for (const r of this.remotes.values()) r.dispose();
     this.remotes.clear(); this.conns.clear(); this.pending.clear();
     try { this.peer?.destroy(); } catch { /* already gone */ }
-    this.peer = null; this.code = ''; this.host = false;
+    this.peer = null; this.code = ''; this.host = false; this.ptt = false;
     if (this.stream && this.micOn) for (const t of this.stream.getTracks()) t.stop();
     this.stream = null; this.micOn = false; this.micError = '';
     try { this.audio?.close(); } catch { /* closed */ }
@@ -294,6 +322,9 @@ export class Net {
       this.onWelcome?.(d, this.code);
     } else if (d.t === 's') {
       this.remotes.get(id)?.apply(d);
+    } else if (d.t === 'ptt') {
+      const r = this.remotes.get(id);
+      if (r) r.ptt = !!d.on;
     } else if (d.t === 'time' && id === idOf(this.code)) {
       this.onTime?.(d);
     }
@@ -339,31 +370,74 @@ export class Net {
     el.srcObject = stream; el.muted = true; el.play().catch(() => {});
     const src = ctx.createMediaStreamSource(stream);
     const an = ctx.createAnalyser(); an.fftSize = 512;
-    const gp = ctx.createGain(), gr = ctx.createGain();
+    const gp = ctx.createGain();
     const panner = ctx.createPanner();
     panner.panningModel = 'HRTF'; panner.distanceModel = 'linear';
     panner.refDistance = RANGE.full; panner.maxDistance = RANGE.none; panner.rolloffFactor = 1;
     src.connect(an); src.connect(gp); gp.connect(panner); panner.connect(ctx.destination);
-    src.connect(gr); gr.connect(ctx.destination);
+    // the radio path (silent until that friend keys up and you carry a radio) and its hiss
+    const chain = radioChain(ctx), rg = ctx.createGain(); rg.gain.value = 0;
+    src.connect(chain.input); chain.output.connect(rg); rg.connect(ctx.destination);
+    const hiss = ctx.createBufferSource(); hiss.buffer = this.#noise(); hiss.loop = true;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1500; bp.Q.value = 0.45;
+    const hg = ctx.createGain(); hg.gain.value = 0;
+    hiss.connect(bp); bp.connect(hg); hg.connect(ctx.destination); hiss.start();
     const buf = new Uint8Array(an.fftSize);
     r.voice = {
-      panner, gp, gr, an, buf,
-      stop() { try { src.disconnect(); gp.disconnect(); gr.disconnect(); panner.disconnect(); } catch { /* gone */ } el.srcObject = null; },
+      panner, gp, rg, hg, an, buf,
+      stop() { try { src.disconnect(); gp.disconnect(); panner.disconnect(); chain.output.disconnect(); rg.disconnect(); hiss.stop(); hiss.disconnect(); bp.disconnect(); hg.disconnect(); } catch { /* gone */ } el.srcObject = null; },
     };
-    this.#mode();
   }
 
-  #mode() {
-    for (const r of this.remotes.values()) if (r.voice) { r.voice.gp.gain.value = this.radio ? 0 : 1; r.voice.gr.gain.value = this.radio ? 1 : 0; }
+  /** Two seconds of white noise, made once. */
+  #noise() {
+    if (this.noise && this.noise.sampleRate === this.audio.sampleRate) return this.noise;
+    const ctx = this.audio, buf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    return (this.noise = buf);
   }
 
-  setRadio(on) { this.radio = on; this.#mode(); this.#render(); }
+  /** A burst of static (the click of a key-up, the squelch tail) and an optional beep. */
+  #squelch(len, level, beep = false) {
+    const ctx = this.audio;
+    if (!ctx) return;
+    const t = ctx.currentTime, src = ctx.createBufferSource(), g = ctx.createGain(), bp = ctx.createBiquadFilter();
+    src.buffer = this.#noise(); bp.type = 'bandpass'; bp.frequency.value = 2200; bp.Q.value = 0.5;
+    g.gain.setValueAtTime(level, t); g.gain.exponentialRampToValueAtTime(0.0005, t + len);
+    src.connect(bp); bp.connect(g); g.connect(ctx.destination); src.start(t, Math.random()); src.stop(t + len + 0.02);
+    if (beep) this.#beep(t + len * 0.7, 1250, 0.07, 0.07);
+  }
 
-  setMuted(on) {
-    if (!this.stream || !this.micOn) return;
-    for (const t of this.stream.getAudioTracks()) t.enabled = !on;
-    this.muted = on;
-    this.#render();
+  #beep(at, freq, dur, level) {
+    const ctx = this.audio;
+    if (!ctx) return;
+    const o = ctx.createOscillator(), g = ctx.createGain(), lp = ctx.createBiquadFilter();
+    o.type = 'sine'; o.frequency.value = freq; lp.type = 'lowpass'; lp.frequency.value = 2400;
+    g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(level, at + 0.006); g.gain.setValueAtTime(level, at + dur - 0.012); g.gain.linearRampToValueAtTime(0, at + dur);
+    o.connect(lp); lp.connect(g); g.connect(ctx.destination); o.start(at); o.stop(at + dur + 0.02);
+  }
+
+  /** Push to talk: tell the others, and chirp so you know the key is down. Only does anything while connected. */
+  setPtt(on) {
+    on = !!on && this.connected;
+    if (on === this.ptt) return;
+    this.ptt = on;
+    for (const c of this.conns.values()) if (c.open) c.send({ t: 'ptt', on });
+    if (this.audio) { if (on) this.#beep(this.audio.currentTime, 880, 0.06, 0.06); else this.#beep(this.audio.currentTime, 1320, 0.05, 0.05); }
+  }
+
+  /** How well a radio at `b` reaches one at `a`: 0..1, from distance and the ground between them. */
+  #signal(a, b) {
+    const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz);
+    let q = 1 - smooth(RADIO.clear, RADIO.far, d);
+    if (q <= 0) return { q: 0, d, blocked: false };
+    const n = Math.min(40, Math.ceil(d / 60)), ya = a.y + 1.7, yb = b.y + 1.7;
+    let blocked = false;
+    for (let i = 1; i < n && !blocked; i++) {
+      const t = i / n;
+      if (this.world.height(a.x + dx * t, a.z + dz * t) > ya + (yb - ya) * t) blocked = true;
+    }
+    return { q: blocked ? q * 0.5 : q, d, blocked };
   }
 
   // ------------------------------------------------------------------ every frame
@@ -380,6 +454,18 @@ export class Net {
         for (let i = 0; i < v.buf.length; i++) { const x = (v.buf[i] - 128) / 128; s += x * x; }
         const talk = Math.sqrt(s / v.buf.length) > 0.02;
         if (talk !== r.speaking) { r.speaking = talk; this.#render(); }
+        // the radio: you hear a friend who is keying up when you both carry one and they are too far to hear directly
+        const sig = r.sig;
+        if (this.audio && performance.now() > sig.next) { sig.next = performance.now() + 250; Object.assign(sig, this.#signal(this.where ? this.where() : camera.position, r.b.pos)); }
+        const rx = r.ptt && !!this.hasRadio?.() && sig.d > RADIO.near && sig.q > 0;
+        const now = this.audio.currentTime;
+        v.rg.gain.setTargetAtTime(rx ? sig.q : 0, now, 0.03);
+        v.hg.gain.setTargetAtTime(rx ? 0.012 + (1 - sig.q) * 0.1 : 0, now, 0.05);
+        if (rx !== r.rxWas) {
+          if (rx) this.#squelch(0.045, 0.16);                    // their key-up: a click
+          else if (r.rxWas) this.#squelch(0.17, 0.12, true);     // their key-down: the squelch tail, then the beep
+          r.rxWas = rx;
+        }
       }
     }
     const L = this.audio?.listener;
@@ -417,7 +503,6 @@ export class Net {
       else if (b.dataset.a === 'leave') { this.leave(); }
       else if (b.dataset.a === 'copy') { navigator.clipboard?.writeText(inviteLink(this.code)).then(() => this.toast?.('Invite link copied.')).catch(() => this.toast?.(`Send your friend the code ${this.code}.`)); }
       else if (b.dataset.a === 'mic') this.setMuted(!this.muted);
-      else if (b.dataset.a === 'radio') this.setRadio(!this.radio);
       else if (b.dataset.a === 'close') this.closePanel();
     });
     this.roster = el('div', 'mp-roster hidden');
@@ -441,7 +526,7 @@ export class Net {
         <div class="mp-code" aria-label="Game code">${this.code}</div>
         <p class="mp-sub">${this.host ? `Friends open ${inviteLink('').replace('?join=', '')} and enter this code, or use the invite link.` : 'You are playing with the host and their friends.'}</p>
         <ul class="mp-list"><li class="me"><b>${me.name}</b> <small>you</small></li>${this.players.map((r) => `<li class="${r.speaking ? 'talk' : ''}"><b>${r.name}</b>${r.speaking ? ' <small>talking</small>' : ''}</li>`).join('') || '<li class="none">Waiting for friends…</li>'}</ul>
-        <div class="mp-row"><button data-a="mic" ${this.micOn ? '' : 'disabled'}>${this.micOn ? (this.muted ? 'Unmute mic' : 'Mute mic') : 'No mic'}</button><button data-a="radio" class="${this.radio ? 'on' : ''}">${this.radio ? 'Radio: everyone, full volume' : 'Voices fade with distance'}</button></div>
+        <div class="mp-row"><button data-a="mic" ${this.micOn ? '' : 'disabled'}>${this.micOn ? (this.muted ? 'Unmute mic' : 'Mute mic') : 'No mic'}</button><span class="mp-hint">Voices fade with distance. Take out your radio (pack, [Tab]) and hold [Click] to talk to far away friends.</span></div>
         <p class="mp-sub">${mic}</p>
         <div class="mp-btns">${this.host ? '<button data-a="copy">Copy invite link</button>' : ''}<button data-a="leave" class="danger">Leave</button><button data-a="close" class="primary">Done</button></div>`;
     }

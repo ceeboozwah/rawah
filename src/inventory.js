@@ -21,11 +21,12 @@ export const ITEMS = {
   straw: { name: 'LifeStraw', kind: 'water', tip: 'Drink straight from a stream or lake through a 0.2 micron filter.', icon: svg('<path d="M5 19L19 5"/><path d="M15.500 4.500l4 4"/><path d="M4 20l1.500-3"/>') },
   pump: { name: 'Pump filter', kind: 'treat', tip: '[U] pumps the water in your bottle through a ceramic filter.', icon: svg('<path d="M12 2.500v8M8 2.500h8"/><path d="M9 10.500h6V19H9z"/><path d="M4.500 17H9M15 17h4.500"/>') },
   iodine: { name: 'Iodine tablets', kind: 'treat', tip: '[U] drops tablets in your bottle. About an hour to work.', icon: svg('<path d="M9 2.500h6v3H9z"/><path d="M8 5.500h8V20a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1z"/><path d="M8 12h8"/>') },
+  radio: { name: 'Handheld radio', kind: 'gear', tip: 'Hold [Click] to talk to a friend who is too far to hear you. They need a radio in their pack too. Hills in the way make it crackle.', icon: svg('<rect x="7" y="8" width="10" height="14" rx="2"/><path d="M14 8V2.5M9.500 12h5M9.500 15.500h5M9.500 18.500h5"/>') },
   builder: { name: 'World builder', kind: 'dev', tip: 'Developer tool: fly, place trees, rocks, cars, signs and camp props, move them with a gizmo, erase, and sculpt the ground with telekinesis. [F2] also opens it.', icon: svg('<path d="M12 2.5l8 4.500v9L12 21l-8-5v-9z"/><path d="M4 7l8 4.500L20 7M12 11.500V21"/>') },
   firewood: { name: 'Firewood', kind: 'stuff', tip: 'Logs for the fire. [J] drops them.', icon: svg('<ellipse cx="7" cy="16" rx="2.500" ry="3"/><path d="M7 13h11a2.500 3 0 0 1 0 6H7"/><ellipse cx="10" cy="8" rx="2.500" ry="3"/><path d="M10 5h8a2.500 3 0 0 1 0 6h-8"/>') },
 };
 
-const START_PACK = ['axe', 'machete', 'fireworks', 'mind', 'canteen', 'bladder', 'pot', 'straw', 'pump', 'iodine'];
+const START_PACK = ['axe', 'machete', 'fireworks', 'mind', 'canteen', 'bladder', 'pot', 'straw', 'pump', 'iodine', 'radio'];
 const START_BAR = ['axe', 'machete', 'fireworks', 'mind', 'canteen'];
 
 export class Inventory {
@@ -33,6 +34,7 @@ export class Inventory {
 
   /** Developer builds carry the world builder (opens the editor, src/editor.js). */
   #devItems() {
+    if (!this.has('radio')) { const f = this.pack.indexOf(null); if (f >= 0) this.pack[f] = { id: 'radio', n: 1 }; }     // older saves get the radio too
     if (!this.dev || this.has('builder')) return;
     const free = this.pack.indexOf(null);
     if (free >= 0) this.pack[free] = { id: 'builder', n: 1 };

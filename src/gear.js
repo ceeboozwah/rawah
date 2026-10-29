@@ -202,6 +202,50 @@ export function buildPot() {
   return g;
 }
 
+/** A handheld two-way radio (the kind sold for hiking and camping): rounded black body, rubber-duck antenna, channel and volume
+ *  knobs on top, a small screen, a speaker grille, a long push-to-talk bar down the side and a belt clip on the back. About 6 x 3.4 x
+ *  12 cm; the origin is the middle of the body, the antenna points up (+y) and the front faces +z. */
+export function buildRadio() {
+  const g = new THREE.Group();
+  const plastic = new THREE.MeshStandardMaterial({ color: 0x23262a, metalness: 0.05, roughness: 0.55 });
+  const rubber = new THREE.MeshStandardMaterial({ color: 0x121315, metalness: 0, roughness: 0.9 });
+  const face = new THREE.MeshStandardMaterial({ color: 0x31353a, metalness: 0.1, roughness: 0.45 });
+  const lcd = new THREE.MeshStandardMaterial({ color: 0x244a3f, emissive: 0x1d5a48, emissiveIntensity: 0.55, roughness: 0.25 });
+  const accent = new THREE.MeshStandardMaterial({ color: 0xd8692a, metalness: 0, roughness: 0.6 });
+  const steel = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, metalness: 0.7, roughness: 0.35 });
+  const add = (geo, mat, x, y, z, rot) => { const o = new THREE.Mesh(geo, mat); o.position.set(x, y, z); if (rot) o.rotation.set(...rot); o.castShadow = true; g.add(o); return o; };
+  // body: a rounded rectangle extruded, bevelled edges
+  const W = 0.058, H = 0.118, D = 0.032, r = 0.009;
+  const sh = new THREE.Shape();
+  sh.moveTo(-W / 2 + r, -H / 2); sh.lineTo(W / 2 - r, -H / 2); sh.quadraticCurveTo(W / 2, -H / 2, W / 2, -H / 2 + r);
+  sh.lineTo(W / 2, H / 2 - r); sh.quadraticCurveTo(W / 2, H / 2, W / 2 - r, H / 2); sh.lineTo(-W / 2 + r, H / 2);
+  sh.quadraticCurveTo(-W / 2, H / 2, -W / 2, H / 2 - r); sh.lineTo(-W / 2, -H / 2 + r); sh.quadraticCurveTo(-W / 2, -H / 2, -W / 2 + r, -H / 2);
+  const bodyGeo = new THREE.ExtrudeGeometry(sh, { depth: D - 0.006, bevelEnabled: true, bevelSize: 0.003, bevelThickness: 0.003, bevelSegments: 2, curveSegments: 6 });
+  bodyGeo.translate(0, 0, -(D - 0.006) / 2);
+  add(bodyGeo, plastic, 0, 0, 0);
+  // faceplate: a slightly lighter panel, the screen above, three small keys, the speaker grille below
+  add(new THREE.BoxGeometry(W - 0.012, 0.05, 0.002), face, 0, 0.028, D / 2 + 0.0005);
+  add(new THREE.BoxGeometry(0.036, 0.018, 0.0015), lcd, 0, 0.04, D / 2 + 0.0017);
+  for (const kx of [-0.014, 0, 0.014]) add(new THREE.CylinderGeometry(0.0055, 0.0055, 0.003, 12), rubber, kx, 0.014, D / 2 + 0.0018, [Math.PI / 2, 0, 0]);
+  for (let i = 0; i < 6; i++) add(new THREE.BoxGeometry(0.034, 0.0022, 0.0015), rubber, 0, -0.012 - i * 0.0062, D / 2 + 0.0005);
+  add(new THREE.BoxGeometry(0.02, 0.0045, 0.0015), accent, 0, -0.052, D / 2 + 0.0005);      // an orange stripe, the way they come
+  // the push-to-talk bar on the left side and a smaller side key above it
+  add(new THREE.BoxGeometry(0.006, 0.036, 0.018), rubber, -W / 2 - 0.0008, 0.008, 0.002);
+  add(new THREE.BoxGeometry(0.005, 0.014, 0.012), rubber, -W / 2 - 0.0008, 0.043, 0.002);
+  // top: antenna base and a tapering antenna, the volume knob and the channel knob
+  add(new THREE.CylinderGeometry(0.0085, 0.0095, 0.012, 16), steel, 0.012, H / 2 + 0.004, 0);
+  const ant = add(new THREE.CylinderGeometry(0.0042, 0.0062, 0.14, 12), rubber, 0.012, H / 2 + 0.07, 0);
+  ant.rotation.z = -0.03;
+  add(new THREE.CylinderGeometry(0.009, 0.009, 0.014, 20), rubber, -0.016, H / 2 + 0.007, 0);
+  add(new THREE.CylinderGeometry(0.0075, 0.0075, 0.012, 18), accent, -0.016, H / 2 + 0.019, 0);
+  add(new THREE.CylinderGeometry(0.0075, 0.0075, 0.01, 18), rubber, -0.004, H / 2 + 0.005, 0.006);
+  // the back: a belt clip
+  add(new THREE.BoxGeometry(0.02, 0.07, 0.003), steel, 0, 0.0, -D / 2 - 0.0016);
+  g.userData.top = new THREE.Vector3(0.012, H / 2 + 0.14, 0);         // the antenna tip
+  g.userData.mic = new THREE.Vector3(0, 0.02, D / 2);                 // where it is spoken into
+  return g;
+}
+
 /** A LifeStraw: a pale tube with a blue band and a mouthpiece cap, 0.22 m long, lying along +x with its centre at the origin. */
 export function buildStraw() {
   const m = mats(), g = new THREE.Group();
@@ -227,6 +271,11 @@ export class Gear {
     this.reset();
     // held: first person hangs off the camera (beyond the near plane), third person sits in the hand
     this.held = buildCanteen();
+    this.radioObj = buildRadio();
+    this.radioFp = buildRadio();
+    this.radioFp.visible = false;
+    camera.add(this.radioFp);
+    this.radioLift = 0;
     this.heldFp = buildCanteen();
     this.heldFp.visible = false;
     camera.add(this.heldFp);
@@ -444,6 +493,7 @@ export class Gear {
     this.events.length = 0;
     const a = this.act;
     this.ctx = ctx;
+    this.#radio(dt, ctx);
     if (ctx.gm > 0) this.advance(ctx.gm);
     // the first-person canteen is only there while drinking from it
     this.heldFp.visible = !!a && a.kind === 'drink' && ctx.first && a.c === this.canteen;
@@ -462,7 +512,20 @@ export class Gear {
   emit(e) { this.events.push(e); }
 
   #itemInHand(on) {
-    if (this.avatar.setItem) this.avatar.setItem(on ? this.held : null);
+    if (this.avatar.setItem) this.avatar.setItem(on ? this.held : this.ctx?.radio ? this.radioObj : null);
+  }
+
+  /** The radio in the hand: down at the side while you wait, up at your mouth while you hold the button. */
+  #radio(dt, ctx) {
+    const on = !!ctx.radio && ctx.first;
+    this.radioLift += ((ctx.ptt ? 1 : 0) - this.radioLift) * Math.min(1, dt * 12);
+    const o = this.radioFp, k = this.radioLift;
+    o.visible = on;
+    if (!on) return;
+    o.scale.setScalar(1.5);
+    // held beyond the 0.4 m near plane, or its top would be clipped
+    o.position.set(THREE.MathUtils.lerp(0.2, 0.07, k), THREE.MathUtils.lerp(-0.26, -0.15, k), THREE.MathUtils.lerp(-0.66, -0.58, k));
+    o.rotation.set(THREE.MathUtils.lerp(0.3, 0.42, k), THREE.MathUtils.lerp(-0.5, -0.15, k), THREE.MathUtils.lerp(-0.12, 0, k));
   }
 
   #hide() { this.station.visible = false; this.ctx?.hiker && (this.ctx.hiker.emote = ''); this.pumped = 0; }

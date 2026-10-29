@@ -731,3 +731,4 @@ body.touch #rec { top: calc(max(12px, env(safe-area-inset-top)) + 50px); right: 
 #join-code::placeholder { letter-spacing: 0.2em; color: var(--faint); }
 .join-note { margin: 0; font: 400 var(--t-xs) var(--sans); color: var(--faint); line-height: 1.4; text-align: left; }
 @media (max-width: 760px) { .friends .chips { justify-content: center; } .join-note { text-align: center; } }
+.mp-hint { font: 400 var(--t-xs) var(--sans); color: var(--faint); line-height: 1.4; }

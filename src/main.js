@@ -40,7 +40,7 @@ import { gustAt, WIND_DIR } from './wind.js';
 import { CrewTalk } from './crewtalk.js';
 import { Intro } from './intro.js';
 import { Hydration, relativeHumidity, heatIndexC, heatCategory, BODY_KG } from './hydration.js';
-import { Gear, buildCanteen, buildBladder, buildPot, buildStraw, buildFilter } from './gear.js';
+import { Gear, buildCanteen, buildBladder, buildPot, buildStraw, buildFilter, buildRadio } from './gear.js';
 import { Inventory, InventoryUI, ITEMS } from './inventory.js';
 import { Placements } from './placements.js';
 import { Editor } from './editor.js';
@@ -416,6 +416,8 @@ const net = new Net({
   },
   info: () => ({ time: { hour: state.hour, day: state.day, doy: calendar.doy }, weather: weather.save(), pos: { x: hiker.pos.x, z: hiker.pos.z } }),
   timeNow: () => ({ hour: state.hour, day: state.day }),
+  hasRadio: () => inventory.has('radio'),
+  where: () => hiker.pos,
   onTime: (t) => { if (Math.abs((t.day * 24 + t.hour) - (state.day * 24 + state.hour)) > 0.04) { state.hour = t.hour; state.day = t.day; } },
   onWelcome: (w, code) => {
     if (w.time.doy !== calendar.doy) {
@@ -935,7 +937,7 @@ function hydrationStep(dt, live, p) {
     tempC: tC, rh, wind: Math.max(0, weather.wind) * 7, sunW, elev: p.y,
   });
   // the canteen
-  const ctx = { p, yaw: hiker.yaw, first: rig.mode === 'first', hiker, hydration, fire: camp.fire ? { x: camp.fire.x, z: camp.fire.z } : null, waterC: clamp(tC - 2, 2, 20), gm: live ? dt * (state.resting ? 8 : 1) * settings.timeScale : 0, dry: (x, z) => { const lk = world.lakeAt(x, z); return (!lk || world.height(x, z) > lk.level + 0.08) && !onStream(x, z); }, turbAt: (x, z) => waterCells.at(x, z).turbidity, groundY: (x, z) => world.height(x, z) };
+  const ctx = { p, yaw: hiker.yaw, first: rig.mode === 'first', hiker, hydration, radio: inventory.id === 'radio', ptt: live && inventory.id === 'radio' && keys.has('Mouse0'), fire: camp.fire ? { x: camp.fire.x, z: camp.fire.z } : null, waterC: clamp(tC - 2, 2, 20), gm: live ? dt * (state.resting ? 8 : 1) * settings.timeScale : 0, dry: (x, z) => { const lk = world.lakeAt(x, z); return (!lk || world.height(x, z) > lk.level + 0.08) && !onStream(x, z); }, turbAt: (x, z) => waterCells.at(x, z).turbidity, groundY: (x, z) => world.height(x, z) };
   for (const e of gear.update(live ? dt : 0, ctx)) {
     if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
     else if (e.type === 'sound') audio[GEAR_SOUND[e.name] || e.name]?.();
@@ -956,7 +958,8 @@ function hydrationStep(dt, live, p) {
   if ((hintTick = (hintTick + 1) % 8) === 0) hintWater = gear.act ? null : waterAhead();
   if (live && gear.busy && rig.mode === 'first') hiker.pitch += ((gear.act.kind === 'fill' || gear.act.kind === 'straw' ? -0.55 : -1.0) - hiker.pitch) * Math.min(1, dt * 2.5);   // you look down at your hands
   const c = gear.cur, k = kindOf(c), nm = gear.name, how = { pump: 'filter', boil: 'boil', iodine: 'add iodine to' }[gear.method];
-  if (gear.busy) waterHint = 'Hold still to keep going  ·  move to stop';
+  if (inventory.id === 'radio') waterHint = net.connected ? 'Hold [Click] to talk on the radio' : 'Radio: host or join a game to talk to friends';
+  else if (gear.busy) waterHint = 'Hold still to keep going  ·  move to stop';
   else if (gear.sel === 'straw') waterHint = hintWater ? '[Y] drink through the LifeStraw' : '';
   else if (hintWater && c.water < c.cap - 0.02) waterHint = `[U] fill the ${nm}`;
   else if (k === 'raw' && hiker.mode === 'walk') waterHint = `[U] ${how} the water${c.turb > 0.3 ? ' (it is silty)' : ''}  ·  [Y] drink`;
@@ -1655,7 +1658,7 @@ const invUI = new InventoryUI(inventory, {
   const ic = renderIcons({
     axe: { obj: buildTool('axe'), spin: -0.75, pitch: 0, yaw: 0.5 }, machete: { obj: buildTool('machete'), spin: -0.75, pitch: 0, yaw: 0.3 }, fireworks: { obj: buildTool('fireworks'), spin: -0.25, pitch: 0.25 },
     canteen: { obj: buildCanteen(), pitch: 0.12, yaw: 0.0 }, bladder: { obj: buildBladder(), pitch: 1.0, yaw: 0.3 }, pot: { obj: buildPot(), pitch: 0.55, yaw: 0.6 },
-    straw: { obj: buildStraw(), pitch: 0, yaw: 0, spin: 0.7 }, pump: { obj: buildFilter(), pitch: 0.2, yaw: 0.6 },
+    straw: { obj: buildStraw(), pitch: 0, yaw: 0, spin: 0.7 }, pump: { obj: buildFilter(), pitch: 0.2, yaw: 0.6 }, radio: { obj: buildRadio(), pitch: 0.15, yaw: 0.55 },
   });
   for (const [id, url] of Object.entries(ic)) ITEMS[id].img = url;
   invUI.render();
@@ -1666,6 +1669,7 @@ function applySelection(announce = true) {
   let tool = 'fists', msg = 'Bare hands';
   if (it?.kind === 'tool') { tool = id; msg = TOOL_HINT[id]; }
   else if (it?.kind === 'water') msg = gear.select(id) || it.name;
+  else if (id === 'radio') msg = 'Handheld radio · hold [Click] to talk to friends far away';
   else if (id === 'pump' || id === 'iodine') { gear.setMethod(id); msg = `${it.name} · [U] on the water in your ${gear.name}`; }
   if (id === 'builder') {
     msg = 'World builder · [1] select · [2] place · [3] erase · [4] sculpt · F2 closes';
@@ -1737,9 +1741,11 @@ function tick(dt, draw = true) {
   // a blade keeps swinging while the button is held; fists still take one press per punch
   const held = hiker.tool === 'axe' || hiker.tool === 'machete';
   const fwOn = hiker.tool === 'fireworks';
-  ctl.punch = live && !mindOn && !fwOn && (held ? (keys.has('KeyQ') || keys.has('Mouse0')) : (pressed.has('KeyQ') || pressed.has('Mouse0')));
+  const radioOn = inventory.id === 'radio';
+  net.setPtt(live && radioOn && keys.has('Mouse0'));
+  ctl.punch = live && !mindOn && !fwOn && !radioOn && (held ? (keys.has('KeyQ') || keys.has('Mouse0')) : (pressed.has('KeyQ') || pressed.has('Mouse0')));
   if (ctl.punch && props.throwStone()) ctl.punch = false;
-  ctl.hook = live && !mindOn && !fwOn && (pressed.has('KeyR') || pressed.has('Mouse2'));
+  ctl.hook = live && !mindOn && !fwOn && !radioOn && (pressed.has('KeyR') || pressed.has('Mouse2'));
   ctl.stomp = live && pressed.has('KeyG');
   // fishing: the lean (A/D or a mouse swing), the reel (held Space) and the hook (Space pressed)
   const fishInp = { x: clamp(ctl.move.x + (ctl.lookX / Math.max(dt, 0.001)) / 3, -1, 1), reel: live && keys.has('Space'), hook: live && pressed.has('Space') };
