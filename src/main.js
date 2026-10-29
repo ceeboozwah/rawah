@@ -246,7 +246,7 @@ const roast = new Roast(scene);
 scene.add(grass.mesh);
 if (forbs) scene.add(forbs.mesh, shrubs.mesh);
 // hand-placed assets (data/placements.json, made with the world editor) and, on a local host, the editor itself (F2)
-const placements = new Placements(world, flora, scene);
+const placements = new Placements(world, flora, scene, { models });
 await placements.load();
 let editor = null;
 const boxels = new Boxels(world, { n: 512 });
@@ -283,7 +283,7 @@ const rig = new CameraRig(camera, world, hiker, avatar);
 const hydration = new Hydration();   // the body's water balance (src/hydration.js)
 hydration.pace = settings.hydroPace;
 const gear = new Gear({ scene, camera, avatar, world });
-const inventory = new Inventory();   // the canteen and the pump filter (src/gear.js)
+const inventory = new Inventory({ dev: DEV });   // the canteen and the pump filter (src/gear.js)
 const intro = new Intro(world, scene, camera, models);   // the truck and the car come down the road and park; the friends step out
 // the family tent's walls and floor
 for (const b of [hiker, atv, party]) b.solids = (p, r) => camp.collide(p, r);
@@ -396,7 +396,7 @@ $('btn-continue').classList.toggle('hidden', !hasSave);
 // ------------------------------------------------------------------ input
 const input = new Input(renderer.domElement);
 const { keys, pressed } = input;
-if (DEV) editor = new Editor({ renderer, camera, scene, world, flora, placements, keys, toast: (t, k) => hud.toast(t, k) });
+if (DEV) editor = new Editor({ renderer, camera, scene, world, flora, placements, keys, toast: (t, k) => hud.toast(t, k), mind });
 if (isTouch) input.enableTouch(document.body);
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.started && !state.paused) pause(true); });
 input.onPress = (code) => {
@@ -575,7 +575,7 @@ function begin(fresh) {
     party.races = { won: 0, lost: 0 };
     guide.load([]);
     state.slept = 0;
-    mind.load([]);
+    mind.load(placements.sculpt);
     shaped({ x0: -Infinity, z0: -Infinity, x1: Infinity, z1: Infinity });
     weather.load({ seed: (Math.random() * 1e9) | 0 });
     spawnAtCar();
@@ -1601,6 +1601,10 @@ function applySelection(announce = true) {
   if (it?.kind === 'tool') { tool = id; msg = TOOL_HINT[id]; }
   else if (it?.kind === 'water') msg = gear.select(id) || it.name;
   else if (id === 'pump' || id === 'iodine') { gear.setMethod(id); msg = `${it.name} · [U] on the water in your ${gear.name}`; }
+  if (id === 'builder') {
+    msg = 'World builder · [1] select · [2] place · [3] erase · [4] sculpt · F2 closes';
+    if (editor && !editor.active && state.started && !state.paused && !state.intro) { editor.fromPack = true; editor.toggle(true); }
+  } else if (editor?.active && editor.fromPack) { editor.fromPack = false; editor.toggle(false); }
   props.setTool(tool);
   invUI.render();
   if (announce) { hud.toast(msg); invUI.flash(it ? it.name : 'Bare hands'); }
@@ -1731,9 +1735,10 @@ function tick(dt, draw = true) {
   else avatar.update(dt, hiker);
   const wheel = input.takeWheel();
   mind.resize(live && mindOn ? wheel : 0);
-  mind.update(dt, live, {
+  const sc = editor?.active ? editor.sculptInput() : null;
+  mind.update(dt, live, sc ? sc.keys : {
     lift: keys.has('KeyQ') || keys.has('Mouse0'), sink: keys.has('KeyR') || keys.has('Mouse2'), level: keys.has('KeyE'),
-  }, shaped);
+  }, shaped, sc && sc.aim);
   props.update(dt, live);
   if (state.started) party.update(live ? dt : 0, hiker);
   if (state.started) crewTalk.update(live ? dt : 0, { player: hiker.pos, storm: weather.storm, wind: WIND_DIR });

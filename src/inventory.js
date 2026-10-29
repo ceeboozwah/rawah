@@ -21,6 +21,7 @@ export const ITEMS = {
   straw: { name: 'LifeStraw', kind: 'water', tip: 'Drink straight from a stream or lake through a 0.2 micron filter.', icon: svg('<path d="M5 19L19 5"/><path d="M15.500 4.500l4 4"/><path d="M4 20l1.500-3"/>') },
   pump: { name: 'Pump filter', kind: 'treat', tip: '[U] pumps the water in your bottle through a ceramic filter.', icon: svg('<path d="M12 2.500v8M8 2.500h8"/><path d="M9 10.500h6V19H9z"/><path d="M4.500 17H9M15 17h4.500"/>') },
   iodine: { name: 'Iodine tablets', kind: 'treat', tip: '[U] drops tablets in your bottle. About an hour to work.', icon: svg('<path d="M9 2.500h6v3H9z"/><path d="M8 5.500h8V20a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1z"/><path d="M8 12h8"/>') },
+  builder: { name: 'World builder', kind: 'dev', tip: 'Developer tool: fly, place trees, rocks, cars, signs and camp props, move them with a gizmo, erase, and sculpt the ground with telekinesis. [F2] also opens it.', icon: svg('<path d="M12 2.5l8 4.500v9L12 21l-8-5v-9z"/><path d="M4 7l8 4.500L20 7M12 11.500V21"/>') },
   firewood: { name: 'Firewood', kind: 'stuff', tip: 'Logs for the fire. [J] drops them.', icon: svg('<ellipse cx="7" cy="16" rx="2.500" ry="3"/><path d="M7 13h11a2.500 3 0 0 1 0 6H7"/><ellipse cx="10" cy="8" rx="2.500" ry="3"/><path d="M10 5h8a2.500 3 0 0 1 0 6h-8"/>') },
 };
 
@@ -28,7 +29,14 @@ const START_PACK = ['axe', 'machete', 'fireworks', 'mind', 'canteen', 'bladder',
 const START_BAR = ['axe', 'machete', 'fireworks', 'mind', 'canteen'];
 
 export class Inventory {
-  constructor() { this.reset(); }
+  constructor({ dev = false } = {}) { this.dev = dev; this.reset(); }
+
+  /** Developer builds carry the world builder (opens the editor, src/editor.js). */
+  #devItems() {
+    if (!this.dev || this.has('builder')) return;
+    const free = this.pack.indexOf(null);
+    if (free >= 0) this.pack[free] = { id: 'builder', n: 1 };
+  }
 
   reset() {
     this.pack = Array(PACK).fill(null);
@@ -36,6 +44,7 @@ export class Inventory {
     this.bar = Array(BAR).fill(null);
     START_BAR.forEach((id, i) => { this.bar[i] = id; });
     this.sel = -1;                                   // -1: bare hands
+    this.#devItems();
   }
 
   has(id) { return this.pack.some((s) => s && s.id === id && s.n > 0); }
@@ -86,6 +95,7 @@ export class Inventory {
     if (Array.isArray(d.p)) { this.pack = Array(PACK).fill(null); d.p.slice(0, PACK).forEach((s, i) => { if (s && ITEMS[s[0]]) this.pack[i] = { id: s[0], n: s[1] || 1 }; }); }
     if (Array.isArray(d.b)) this.bar = Array.from({ length: BAR }, (_, i) => (ITEMS[d.b[i]] ? d.b[i] : null));
     this.sel = Number.isInteger(d.s) && d.s >= -1 && d.s < BAR ? d.s : -1;
+    this.#devItems();
   }
 }
 

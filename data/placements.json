@@ -1,5 +1,13 @@
 {"version":1,
 "items":[
-
+  {"id":"p1","asset":"spruce:1","x":-505,"z":5072.51,"dy":3.37,"yaw":-1.33,"pitch":-0.941,"roll":0.792,"s":0.783},
+  {"id":"p2","asset":"spruce:1","x":-510.58,"z":5073.01,"dy":0,"yaw":2.786,"pitch":0,"roll":0,"s":1.053},
+  {"id":"p3","asset":"lodgepole:3","x":-516.63,"z":5074.74,"dy":0,"yaw":3.554,"pitch":0,"roll":0,"s":1},
+  {"id":"p4","asset":"lodgepole:3","x":-508.26,"z":5078.85,"dy":0,"yaw":0.346,"pitch":0,"roll":0,"s":0.96},
+  {"id":"p5","asset":"boulder:1","x":-513.93,"z":5078.93,"dy":0,"yaw":4.967,"pitch":0,"roll":0,"s":0.92},
+  {"id":"p6","asset":"boulder:1","x":-503.53,"z":4970.8,"dy":0,"yaw":1.308,"pitch":0,"roll":0,"s":0.878},
+  {"id":"p7","asset":"boulder:1","x":-503.53,"z":4970.8,"dy":0,"yaw":1.308,"pitch":0,"roll":0,"s":0.878},
+  {"id":"p8","asset":"boulder:1","x":-220.09,"z":4948.55,"dy":0,"yaw":2.055,"pitch":0,"roll":0,"s":0.988},
+  {"id":"p9","asset":"boulder:1","x":-220.09,"z":4948.55,"dy":0,"yaw":2.055,"pitch":0,"roll":0,"s":0.988}
 ],
-"removed":[]}
+"removed":["spruce:-515.42:5012.96"]}

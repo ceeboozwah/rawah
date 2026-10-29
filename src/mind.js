@@ -129,16 +129,18 @@ export class Mind {
   /** Brush size from the wheel. */
   resize(wheel) { if (wheel) this.radius = Math.min(R_MAX, Math.max(R_MIN, this.radius - wheel * 0.75)); }
 
-  update(dt, live, { lift, sink, level }, onShaped) {
-    const on = this.active && live;
-    this.group.visible = this.active;
-    this.has = on && this.#aim();
+  update(dt, live, { lift, sink, level }, onShaped, aim = null) {
+    // the world editor aims the brush itself, from a free camera, with no reach limit and no hiker
+    const forced = !!aim;
+    const on = forced || (this.active && live);
+    this.group.visible = forced || this.active;
+    if (forced) { this.target.set(aim.x, this.world.height(aim.x, aim.z), aim.z); this.has = true; } else this.has = on && this.#aim();
     const want = !this.has ? '' : level ? 'level' : lift && !sink ? 'lift' : sink && !lift ? 'sink' : '';
     if (want !== this.mode) {
       if (want === 'level') this.level = this.target.y;
       this.held = 0; this.mode = want;
     }
-    this.hiker.channel = !!this.mode;
+    this.hiker.channel = !forced && !!this.mode;
     const sculpt = this.world.sculpt;
 
     if (this.mode) {
@@ -190,7 +192,7 @@ export class Mind {
   #fx(dt) {
     this.motes.step(dt, -0.25, 1.4);
     this.dust.step(dt, 3.4, 0.9);
-    if (!this.active || !this.has) { this.outer.visible = this.inner.visible = this.glow.visible = false; return; }
+    if ((!this.active && !this.group.visible) || !this.has) { this.outer.visible = this.inner.visible = this.glow.visible = false; return; }
     this.outer.visible = this.inner.visible = this.glow.visible = true;
     this.pulse += dt * (this.mode ? 5 : 1.8);
     const t = this.target, w = this.world, r = this.radius;

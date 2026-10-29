@@ -602,7 +602,7 @@ export const CAR_ORDER = ['civic', 'maverick'];
 const CAR_LENGTH = 4.6, CAR_SPACING = 5.7;   // nose to tail with a gap (the cars were 3.4 m apart, shorter than a car, so they overlapped)
 
 /** A landmark model from assets/landmarks, scaled to `height` metres tall and standing on the origin. */
-function landmark(template, height) {
+export function landmark(template, height) {
   const box = new THREE.Box3().setFromObject(template);
   const size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
   const s = height / size.y;

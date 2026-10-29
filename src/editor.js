@@ -13,11 +13,12 @@ import { itemKey } from './flora.js';
 // The game reads the ledger at boot, so a saved placement is in the game on the next load with no code change.
 
 const FLY = 28;
-const MODES = { select: '1', place: '2', erase: '3' };
+const MODES = { select: '1', place: '2', erase: '3', sculpt: '4' };
 
 export class Editor {
-  constructor({ renderer, camera, scene, world, flora, placements, keys, toast }) {
-    Object.assign(this, { renderer, camera, scene, world, flora, placements, keys, toast });
+  constructor({ renderer, camera, scene, world, flora, placements, keys, toast, mind }) {
+    Object.assign(this, { renderer, camera, scene, world, flora, placements, keys, toast, mind });
+    this.pressed = false;               // the left button, for the sculpt brush
     this.active = false;
     this.mode = 'select';
     this.pos = new THREE.Vector3();
@@ -135,6 +136,7 @@ export class Editor {
     if (!this.active) return;
     this.#ndc(e);
     if (e.button === 2) { this.look = true; this.lx = e.clientX; this.ly = e.clientY; e.preventDefault(); }
+    if (e.button === 0 && this.mode === 'sculpt' && e.target === this.renderer.domElement) this.pressed = true;
   }
 
   #move(e) {
@@ -150,6 +152,8 @@ export class Editor {
   #up(e) {
     if (!this.active) return;
     if (e.button === 2) { this.look = false; return; }
+    if (e.button === 0) this.pressed = false;
+    if (this.mode === 'sculpt') return;
     if (e.button !== 0 || e.target !== this.renderer.domElement) return;
     if (this.dragging || performance.now() - (this.dragEnd || 0) < 150 || this.controls.axis) return;      // that click was the gizmo's
     this.#ndc(e);
@@ -235,7 +239,10 @@ export class Editor {
   }
 
   async save() {
-    const body = JSON.stringify(this.placements.toJSON());
+    const ledger = this.placements.toJSON();
+    ledger.sculpt = this.world.sculpt.save();                     // the terrain edits (telekinesis) ride in the same file
+    this.placements.sculpt = ledger.sculpt;
+    const body = JSON.stringify(ledger);
     try { localStorage.setItem('rawah-placements-draft', body); } catch { /* private window */ }
     try {
       const r = await fetch('/dev/placements', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
@@ -252,6 +259,7 @@ export class Editor {
     if (meta && code === 'KeyZ') { this.#undo(); return true; }
     if (meta && code === 'KeyD' && this.sel) { this.#push(); const c = { ...this.sel }; delete c.id; this.#select(this.placements.add(c.asset, c.x + 2, c.z + 2, c), true); return true; }
     for (const [m, key] of Object.entries(MODES)) if (code === `Digit${key}`) { this.setMode(m); return true; }
+    if (this.mode === 'sculpt' && (code === 'BracketLeft' || code === 'BracketRight')) { this.mind.radius = Math.min(40, Math.max(1.5, this.mind.radius * (code === 'BracketRight' ? 1.25 : 0.8))); return true; }
     if (code === 'KeyT') { this.controls.setMode('translate'); this.#status(); return true; }
     if (code === 'KeyR') { this.controls.setMode('rotate'); this.#status(); return true; }
     if (code === 'KeyY') { this.controls.setMode('scale'); this.#status(); return true; }
@@ -264,9 +272,19 @@ export class Editor {
   setMode(m) {
     this.mode = m;
     if (m !== 'place') this.#ghostOff();
-    if (m === 'place' && this.sel) this.#select(null);
+    if ((m === 'place' || m === 'sculpt') && this.sel) this.#select(null);
+    this.pressed = false;
     for (const b of this.bar.querySelectorAll('[data-mode]')) b.classList.toggle('on', b.dataset.mode === m);
     this.#status();
+  }
+
+  /** What the telekinesis brush should do this frame (src/mind.js drives it): lift with the left button, sink with Alt held,
+   *  level with L held; [ and ] size the brush. `aim` is where the cursor meets the ground, or null outside sculpt mode. */
+  sculptInput() {
+    const sc = this.mode === 'sculpt' && this.hasHit;
+    const k = this.keys;
+    const down = sc && this.pressed && !this.dragging;
+    return { aim: sc ? this.hit : null, keys: { lift: down && !k.has('AltLeft') && !k.has('AltRight') && !k.has('KeyL'), sink: down && (k.has('AltLeft') || k.has('AltRight')), level: down && k.has('KeyL') } };
   }
 
   // ------------------------------------------------------------------ the ghost under the cursor
@@ -276,7 +294,7 @@ export class Editor {
     if (this.mode !== 'place' || !this.asset || !this.hasHit) { if (this.ghost) this.ghost.visible = false; return; }
     if (!this.ghost || this.ghost.userData.id !== this.asset.id) {
       this.#ghostOff();
-      this.ghost = new THREE.Mesh(this.asset.geometry, this.asset.material);
+      this.ghost = this.asset.obj ? this.asset.make() : new THREE.Mesh(this.asset.geometry, this.asset.material);
       this.ghost.userData.id = this.asset.id;
       this.ghost.frustumCulled = false;
       this.scene.add(this.ghost);
@@ -292,7 +310,7 @@ export class Editor {
     const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
     this.bar = el('div', 'ed-bar glass hidden');
     this.bar.innerHTML = `<b>Editor</b>
-      <button data-mode="select" class="on">Select <kbd>1</kbd></button><button data-mode="place">Place <kbd>2</kbd></button><button data-mode="erase">Erase <kbd>3</kbd></button>
+      <button data-mode="select" class="on">Select <kbd>1</kbd></button><button data-mode="place">Place <kbd>2</kbd></button><button data-mode="erase">Erase <kbd>3</kbd></button><button data-mode="sculpt">Sculpt <kbd>4</kbd></button>
       <span class="sep"></span><button data-g="translate">Move <kbd>T</kbd></button><button data-g="rotate">Rotate <kbd>R</kbd></button><button data-g="scale">Scale <kbd>Y</kbd></button>
       <span class="sep"></span><button data-act="save">Save <kbd>⌘S</kbd></button><button data-act="undo">Undo <kbd>⌘Z</kbd></button>
       <span id="ed-status"></span>`;
@@ -308,7 +326,7 @@ export class Editor {
       <div id="ed-list"></div>
       <div class="ed-opts"><label><input type="checkbox" data-o="randYaw" checked> random turn</label><label><input type="checkbox" data-o="randScale" checked> random size</label><label><input type="checkbox" data-o="snap"> snap</label></div>
       <div id="ed-sel"></div>
-      <p class="ed-help">Right-drag to look · WASD fly · Space/E up · Q down · Shift fast · scroll speed · click to place or select · Del delete</p>`;
+      <p class="ed-help">Right-drag to look · WASD fly · Space/E up · Q down · Shift fast · scroll speed · click to place or select · Del delete · Sculpt: hold left to lift, Alt to sink, L to level, [ ] brush size</p>`;
     document.body.append(this.bar, this.panel);
     this.list = this.panel.querySelector('#ed-list');
     this.search = this.panel.querySelector('#ed-search');
@@ -342,7 +360,7 @@ export class Editor {
     this.iconsDone = true;
     try {
       const items = {};
-      for (const a of this.placements.assets) items[a.id] = { obj: new THREE.Mesh(a.geometry, a.material), pitch: 0.25, yaw: 0.6 };
+      for (const a of this.placements.assets) items[a.id] = { obj: a.obj ? a.make() : new THREE.Mesh(a.geometry, a.material), pitch: 0.25, yaw: 0.6 };
       const ic = renderIcons(items, 96);
       for (const a of this.placements.assets) a.img = ic[a.id];
     } catch { /* names only */ }

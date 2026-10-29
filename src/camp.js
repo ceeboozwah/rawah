@@ -9,7 +9,7 @@ import { FamilyTent } from './famtent.js';
 const CAMP_FROM_WATER = 61;  // 200 ft
 const CAMP_FROM_TRAIL = 30;
 
-function tentMesh() {
+export function tentMesh() {
   const g = new THREE.Group();
   const fly = new THREE.MeshLambertMaterial({ color: 0xd8692a, side: THREE.DoubleSide });
   const floor = new THREE.MeshLambertMaterial({ color: 0x3a3f36 });
@@ -29,7 +29,7 @@ function tentMesh() {
 }
 
 /** A three-legged folding camp stool, seat 45 cm up. */
-function stoolMesh() {
+export function stoolMesh() {
   const g = new THREE.Group();
   const fabric = new THREE.MeshLambertMaterial({ color: 0x2c4a6e });
   const metal = new THREE.MeshLambertMaterial({ color: 0x9aa0a6 });

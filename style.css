@@ -604,3 +604,4 @@ body.inv-open .slot:not(.empty) { cursor: grab; }
 body.editing #hud { opacity: 0.35; }
 .ed-asset { height: auto !important; min-height: 100px; align-content: start; }
 #ed-list { grid-auto-rows: min-content; }
+body.editing #hotbar { pointer-events: auto; z-index: 41; }

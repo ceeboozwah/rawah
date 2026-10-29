@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { objectAssets } from './assets.js';
 
 // The ledger of hand-placed assets (data/placements.json), made with the world editor (src/editor.js) and read by the game at
 // boot, so a placement needs no code change: it is data. Each entry is
@@ -19,8 +20,10 @@ const DIM = { spruce: [18, 3.4], fir: [22, 3], lodgepole: [20, 3], aspen: [12, 3
 const _c = new THREE.Color(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(0, 0, 0, 'YXZ'), _p = new THREE.Vector3(), _s = new THREE.Vector3();
 
 export class Placements {
-  constructor(world, flora, scene) {
+  constructor(world, flora, scene, { models = {} } = {}) {
     this.world = world; this.flora = flora;
+    this.sculpt = [];                // the terrain edits stored in the ledger (applied at boot)
+    this.objs = new Map();           // entry id -> its Object3D, for the assets that are not instanced
     this.items = [];                 // ledger entries
     this.removed = [];               // keys of procedural things taken out
     this.revision = 0;               // bumps on every change (the editor and the renderer watch it)
@@ -39,6 +42,10 @@ export class Placements {
         this.assets.push({ id: `${kind}:${variant}`, kind, variant, name: `${kind[0].toUpperCase()}${kind.slice(1)} ${variant + 1}`, group, h: b.max.y - b.min.y, r: Math.max(b.max.x - b.min.x, b.max.z - b.min.z) / 2, geometry: m.geometry, material: m.material });
       });
     }
+    for (const a of objectAssets(models)) {
+      const probe = a.make(), box = new THREE.Box3().setFromObject(probe), size = box.getSize(new THREE.Vector3());
+      this.assets.push({ ...a, kind: a.id.split(':')[0], h: size.y, r: Math.max(size.x, size.z) / 2 });
+    }
     this.byId = new Map(this.assets.map((a) => [a.id, a]));
     this.solids = [];                // [x, z, radius] rebuilt with the items
     this.#wrapCollide();
@@ -48,8 +55,15 @@ export class Placements {
   async load(url = './data/placements.json') {
     try {
       const r = await fetch(url, { cache: 'no-store' });
-      if (r.ok) this.set(await r.json());
+      if (r.ok) this.loadFile(await r.json());
     } catch { /* no ledger yet */ }
+  }
+
+  /** The ledger file: items, removals and the terrain edits. */
+  loadFile(d) {
+    this.set(d);
+    this.sculpt = d.sculpt || [];
+    if (this.sculpt.length) this.world.sculpt.load(this.sculpt);
   }
 
   set(d) {
@@ -73,6 +87,7 @@ export class Placements {
     for (const it of this.items) {
       const a = this.byId.get(it.asset);
       if (!a || a.kind === 'log' || a.kind === 'willow' || a.kind === 'krumm') continue;
+      if (a.obj) { if (a.solid) this.solids.push([it.x, it.z, a.solid * it.s]); continue; }
       const rock = ROCK_KINDS.includes(a.kind);
       this.solids.push([it.x, it.z, rock ? DIM[a.kind][1] * it.s * 0.8 : 0.24 * it.s * (a.kind === 'snag' ? 0.8 : 1)]);
     }
@@ -98,7 +113,7 @@ export class Placements {
   /** World position of an entry (ground plus its offset). */
   pos(it, out = _p) {
     const a = this.byId.get(it.asset);
-    return out.set(it.x, this.world.height(it.x, it.z) + it.dy - (a ? (SINK[a.kind === 'log' ? 'log' : ROCK_KINDS.includes(a.kind) ? 'rock' : 'tree']) : 0), it.z);
+    return out.set(it.x, this.world.height(it.x, it.z) + it.dy - (a && !a.obj ? (SINK[a.kind === 'log' ? 'log' : ROCK_KINDS.includes(a.kind) ? 'rock' : 'tree']) : 0), it.z);
   }
 
   matrix(it, m = _m) {
@@ -130,16 +145,25 @@ export class Placements {
     if (!this.dirty && !moved) return;
     this.dirty = false;
     this.at.copy(camera.position);
-    const lists = new Map();
+    const lists = new Map(), seen = new Set();
     for (const it of this.items) {
       const a = this.byId.get(it.asset);
+      if (a.obj) {
+        if (Math.hypot(it.x - camera.position.x, it.z - camera.position.z) > 700) continue;
+        let o = this.objs.get(it.id);
+        if (!o || o.userData.asset !== it.asset) { if (o) this.group.remove(o); o = a.make(); o.userData.asset = it.asset; this.group.add(o); this.objs.set(it.id, o); }
+        this.matrix(it, _m).decompose(o.position, o.quaternion, o.scale);
+        o.visible = true; seen.add(it.id);
+        continue;
+      }
       const range = RANGE[ROCK_KINDS.includes(a.kind) || a.kind === 'log' ? 'rock' : 'tree'];
       if (Math.hypot(it.x - camera.position.x, it.z - camera.position.z) > range) continue;
       let l = lists.get(it.asset);
       if (!l) lists.set(it.asset, l = []);
       l.push(it);
     }
-    let drawn = 0;
+    let drawn = seen.size;
+    for (const [id, o] of [...this.objs]) if (!seen.has(id)) { this.group.remove(o); this.objs.delete(id); }
     for (const m of this.meshes.values()) m.count = 0;
     for (const [id, l] of lists) {
       let mesh = this.meshes.get(id);

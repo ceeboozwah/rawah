@@ -70,13 +70,15 @@ def _save_placements(self):
     try:
         d = json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)))
         assert isinstance(d.get('items'), list) and isinstance(d.get('removed', []), list)
+        for c in d.get('sculpt', []):
+            assert isinstance(c[0], int) and isinstance(c[1], int) and isinstance(c[2], str)
         for it in d['items']:
             assert isinstance(it.get('asset'), str) and all(isinstance(it.get(k), (int, float)) for k in ('x', 'z', 'dy', 'yaw', 'pitch', 'roll', 's'))
     except Exception:
         self.send_error(400, 'not a placement ledger')
         return
     lines = ',\n'.join('  ' + json.dumps(it, separators=(',', ':')) for it in d['items'])
-    text = '{"version":1,\n"items":[\n' + lines + '\n],\n"removed":' + json.dumps(d.get('removed', []), separators=(',', ':')) + '}\n'
+    text = '{"version":1,\n"items":[\n' + lines + '\n],\n"removed":' + json.dumps(d.get('removed', []), separators=(',', ':')) + ',\n"sculpt":[\n' + ',\n'.join('  ' + json.dumps(c, separators=(',', ':')) for c in d.get('sculpt', [])) + '\n]}\n'
     path = os.path.join(ROOT, 'data', 'placements.json')
     tmp = path + '.tmp'
     with open(tmp, 'w') as f:
