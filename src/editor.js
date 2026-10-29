@@ -50,6 +50,7 @@ export class Editor {
     el.addEventListener('contextmenu', (e) => { if (this.active) e.preventDefault(); });
     el.addEventListener('pointerdown', (e) => this.#down(e));
     window.addEventListener('pointermove', (e) => this.#move(e));
+    document.addEventListener('pointerlockchange', () => { this.locked = document.pointerLockElement === renderer.domElement; document.body.classList.toggle('ed-locked', this.locked && this.active); if (this.locked) this.ndc.set(0, 0); });
     window.addEventListener('pointerup', (e) => this.#up(e));
     el.addEventListener('wheel', (e) => { if (!this.active) return; e.preventDefault(); this.speed = Math.min(16, Math.max(0.1, this.speed * (e.deltaY > 0 ? 0.85 : 1.18))); this.#status(); }, { passive: false });
     this.#status();
@@ -63,11 +64,12 @@ export class Editor {
     this.panel.classList.toggle('hidden', !on);
     this.bar.classList.toggle('hidden', !on);
     if (on) {
-      if (document.pointerLockElement) document.exitPointerLock();
+      this.lock(true);                         // look with the mouse straight away; F or Esc gives the cursor back for the panel
       this.pos.copy(this.camera.position).y += 6;
       this.yaw = this.camera.rotation.y; this.pitch = 0;
       this.#iconsOnce();
     } else {
+      this.lock(false);
       this.#select(null);
       this.#ghostOff();
     }
@@ -134,13 +136,25 @@ export class Editor {
 
   #down(e) {
     if (!this.active) return;
-    this.#ndc(e);
-    if (e.button === 2) { this.look = true; this.lx = e.clientX; this.ly = e.clientY; e.preventDefault(); }
+    if (!this.locked) this.#ndc(e);
+    if (e.button === 2 && !this.locked) { this.look = true; this.lx = e.clientX; this.ly = e.clientY; e.preventDefault(); }
     if (e.button === 0 && this.mode === 'sculpt' && e.target === this.renderer.domElement) this.pressed = true;
+  }
+
+  /** Mouse-look with the pointer locked (the crosshair is the cursor); false returns the cursor. */
+  lock(on = !this.locked) {
+    if (on) { try { this.renderer.domElement.requestPointerLock()?.catch?.(() => {}); } catch { /* no gesture */ } }
+    else if (document.pointerLockElement) document.exitPointerLock();
   }
 
   #move(e) {
     if (!this.active) return;
+    if (this.locked) {
+      this.yaw -= e.movementX * 0.0022;
+      this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch - e.movementY * 0.0022));
+      this.ndc.set(0, 0);
+      return;
+    }
     this.#ndc(e);
     if (this.look) {
       this.yaw -= (e.clientX - this.lx) * 0.0026;
@@ -156,7 +170,7 @@ export class Editor {
     if (this.mode === 'sculpt') return;
     if (e.button !== 0 || e.target !== this.renderer.domElement) return;
     if (this.dragging || performance.now() - (this.dragEnd || 0) < 150 || this.controls.axis) return;      // that click was the gizmo's
-    this.#ndc(e);
+    if (this.locked) this.ndc.set(0, 0); else this.#ndc(e);
     this.ray.setFromCamera(this.ndc, this.camera);
     if (this.mode === 'place') this.#place();
     else if (this.mode === 'erase') this.#erase();
@@ -260,6 +274,7 @@ export class Editor {
     if (meta && code === 'KeyD' && this.sel) { this.#push(); const c = { ...this.sel }; delete c.id; this.#select(this.placements.add(c.asset, c.x + 2, c.z + 2, c), true); return true; }
     for (const [m, key] of Object.entries(MODES)) if (code === `Digit${key}`) { this.setMode(m); return true; }
     if (this.mode === 'sculpt' && (code === 'BracketLeft' || code === 'BracketRight')) { this.mind.radius = Math.min(40, Math.max(1.5, this.mind.radius * (code === 'BracketRight' ? 1.25 : 0.8))); return true; }
+    if (code === 'KeyF') { this.lock(); return true; }
     if (code === 'KeyT') { this.controls.setMode('translate'); this.#status(); return true; }
     if (code === 'KeyR') { this.controls.setMode('rotate'); this.#status(); return true; }
     if (code === 'KeyY') { this.controls.setMode('scale'); this.#status(); return true; }
@@ -312,12 +327,13 @@ export class Editor {
     this.bar.innerHTML = `<b>Editor</b>
       <button data-mode="select" class="on">Select <kbd>1</kbd></button><button data-mode="place">Place <kbd>2</kbd></button><button data-mode="erase">Erase <kbd>3</kbd></button><button data-mode="sculpt">Sculpt <kbd>4</kbd></button>
       <span class="sep"></span><button data-g="translate">Move <kbd>T</kbd></button><button data-g="rotate">Rotate <kbd>R</kbd></button><button data-g="scale">Scale <kbd>Y</kbd></button>
-      <span class="sep"></span><button data-act="save">Save <kbd>⌘S</kbd></button><button data-act="undo">Undo <kbd>⌘Z</kbd></button>
+      <span class="sep"></span><button data-act="look">Look <kbd>F</kbd></button><button data-act="save">Save <kbd>⌘S</kbd></button><button data-act="undo">Undo <kbd>⌘Z</kbd></button>
       <span id="ed-status"></span>`;
     this.bar.addEventListener('click', (e) => {
       const b = e.target.closest('button'); if (!b) return;
       if (b.dataset.mode) this.setMode(b.dataset.mode);
       else if (b.dataset.g) { this.controls.setMode(b.dataset.g); this.#status(); }
+      else if (b.dataset.act === 'look') this.lock();
       else if (b.dataset.act === 'save') this.save();
       else if (b.dataset.act === 'undo') this.#undo();
     });
@@ -326,7 +342,7 @@ export class Editor {
       <div id="ed-list"></div>
       <div class="ed-opts"><label><input type="checkbox" data-o="randYaw" checked> random turn</label><label><input type="checkbox" data-o="randScale" checked> random size</label><label><input type="checkbox" data-o="snap"> snap</label></div>
       <div id="ed-sel"></div>
-      <p class="ed-help">Right-drag to look · WASD fly · Space/E up · Q down · Shift fast · scroll speed · click to place or select · Del delete · Sculpt: hold left to lift, Alt to sink, L to level, [ ] brush size</p>`;
+      <p class="ed-help">Mouse looks while the cursor is locked (F or Esc frees it for the panel) · right-drag looks when it is free · WASD fly · Space/E up · Q down · Shift fast · scroll speed · click to place or select · Del delete · Sculpt: hold left to lift, Alt to sink, L to level, [ ] brush size</p>`;
     document.body.append(this.bar, this.panel);
     this.list = this.panel.querySelector('#ed-list');
     this.search = this.panel.querySelector('#ed-search');

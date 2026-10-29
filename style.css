@@ -605,3 +605,5 @@ body.editing #hud { opacity: 0.35; }
 .ed-asset { height: auto !important; min-height: 100px; align-content: start; }
 #ed-list { grid-auto-rows: min-content; }
 body.editing #hotbar { pointer-events: auto; z-index: 41; }
+body.ed-locked::after { content: ''; position: fixed; left: 50%; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border: 2px solid rgba(255, 255, 255, 0.85); border-radius: 50%; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5); z-index: 60; pointer-events: none; }
+body.ed-locked .ed-panel, body.ed-locked .ed-bar { opacity: 0.55; pointer-events: none; }
