@@ -104,6 +104,8 @@ export class Poser {
     this.t = 0; this.duration = 1; this.loop = true; this.smooth = true; this.playing = false; this.speed = 1;
     this.opts = { mirror: false, limits: true, auto: true, local: true };
     this.cam = { yaw: 0.35, pitch: 0.12, dist: 3.2, target: new THREE.Vector3() };
+    this.first = false;                 // the view from the character's own eyes
+    this.look = { yaw: 0, pitch: -0.4 };
     this.stage = new THREE.Vector3();
     this.clamped = new Set();
     this.drag = null;
@@ -153,6 +155,7 @@ export class Poser {
       this.#refreshLists();
     } else {
       this.playing = false;
+      if (this.first) this.#firstPerson(false);
       this.camera.clearViewOffset(); this.shift = undefined;
       this.controls.enabled = false; this.controls.visible = false;
       if (this.char?.group) this.char.group.visible = false;
@@ -165,6 +168,7 @@ export class Poser {
     if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '')) return false;
     if (code === 'F3') { this.toggle(false); return true; }
     if (code === 'Space') { this.#play(!this.playing); return true; }
+    if (code === 'KeyV') { this.#firstPerson(!this.first); return true; }
     if (code === 'Delete' || code === 'Backspace') { this.#delKey(); return true; }
     if (code === 'KeyK') { this.#key(); return true; }
     if (code === 'KeyX') { this.#reset(this.sel); return true; }
@@ -177,7 +181,7 @@ export class Poser {
     if (this.char?.group) { this.scene.remove(this.char.group); this.char.group.visible = false; }
     this.tb.clear(); this.order = []; this.markers.clear();
     this.char = new Character(this.scene, name, { lib: this.lib, placeholder: false, firstPerson: false });
-    this.built = false; this.tool = this.tool || 'fists';
+    this.first = false; this.built = false; this.tool = this.tool || 'fists';
     this.#status();
   }
 
@@ -239,6 +243,19 @@ export class Poser {
     this.#refreshBones();
     this.#status();
     return true;
+  }
+
+  /** Look through the character's eyes (its head is hidden so it is not in the way), or back out to the orbit view. */
+  #firstPerson(on) {
+    this.first = on;
+    const head = this.tb.get('mixamorigHead')?.obj;
+    if (head) {
+      if (!head.userData.fpScale) head.userData.fpScale = head.scale.clone();
+      if (on) head.scale.setScalar(0.001); else head.scale.copy(head.userData.fpScale);
+    }
+    for (const e of this.tb.values()) if (e.marker && /Head|Neck/.test(e.name)) e.marker.visible = !on;
+    if (this.fpBtn) this.fpBtn.textContent = on ? 'Back to orbit view' : 'First person view';
+    this.#status();
   }
 
   /** Put the chosen thing in the character's hand: a tool, or one of the game's props. */
@@ -411,6 +428,9 @@ export class Poser {
     if (this.drag.pan) {
       const k = this.cam.dist * 0.0014;
       this.cam.target.addScaledVector(_v.setFromMatrixColumn(this.camera.matrix, 0), -dx * k).addScaledVector(_v2.setFromMatrixColumn(this.camera.matrix, 1), dy * k);
+    } else if (this.first) {
+      this.look.yaw -= dx * 0.004;
+      this.look.pitch = Math.min(1.4, Math.max(-1.4, this.look.pitch - dy * 0.004));
     } else {
       this.cam.yaw -= dx * 0.006;
       this.cam.pitch = Math.min(1.4, Math.max(-0.6, this.cam.pitch + dy * 0.005));
@@ -435,7 +455,8 @@ export class Poser {
     // the arrow keys (or A and D) turn the view round, up and down tilt it, and W and S come closer or back off
     if (!/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '')) {
       const k = this.keys, turn = ((k.has('ArrowLeft') || k.has('KeyA') ? 1 : 0) - (k.has('ArrowRight') || k.has('KeyD') ? 1 : 0)) * dt * 2, tilt = ((k.has('ArrowUp') ? 1 : 0) - (k.has('ArrowDown') ? 1 : 0)) * dt * 1.2, zoom = ((k.has('KeyS') ? 1 : 0) - (k.has('KeyW') ? 1 : 0)) * dt * 1.5;
-      this.cam.yaw += turn; this.cam.pitch = Math.min(1.4, Math.max(-0.6, this.cam.pitch + tilt)); this.cam.dist = Math.min(12, Math.max(0.6, this.cam.dist * (1 + zoom)));
+      if (this.first) { this.look.yaw += turn; this.look.pitch = Math.min(1.4, Math.max(-1.4, this.look.pitch + tilt)); }
+      else { this.cam.yaw += turn; this.cam.pitch = Math.min(1.4, Math.max(-0.6, this.cam.pitch + tilt)); this.cam.dist = Math.min(12, Math.max(0.6, this.cam.dist * (1 + zoom))); }
     }
     this.#orbit();
     for (const e of this.tb.values()) {
@@ -449,8 +470,17 @@ export class Poser {
 
   #orbit() {
     const c = this.cam, t = c.target, cp = Math.cos(c.pitch);
-    this.camera.position.set(t.x + Math.sin(c.yaw) * cp * c.dist, t.y + Math.sin(c.pitch) * c.dist, t.z + Math.cos(c.yaw) * cp * c.dist);
-    this.camera.lookAt(t);
+    const head = this.first && this.built ? this.tb.get('mixamorigHead')?.obj : null;
+    if (head) {
+      // from the character's eyes, looking the way it faces (drag to look about)
+      head.getWorldPosition(this.camera.position);
+      this.camera.position.y += 0.1; this.camera.position.z += 0.08;
+      const lp = Math.cos(this.look.pitch);
+      this.camera.lookAt(_v.set(this.camera.position.x + Math.sin(this.look.yaw) * lp, this.camera.position.y + Math.sin(this.look.pitch), this.camera.position.z + Math.cos(this.look.yaw) * lp));
+    } else {
+      this.camera.position.set(t.x + Math.sin(c.yaw) * cp * c.dist, t.y + Math.sin(c.pitch) * c.dist, t.z + Math.cos(c.yaw) * cp * c.dist);
+      this.camera.lookAt(t);
+    }
     // the character sits in the clear part of the screen, right of the panel
     const w = innerWidth, h = innerHeight, sh = Math.min(150, w * 0.12);
     if (this.shift !== sh || this.vw !== w || this.vh !== h) { this.shift = sh; this.vw = w; this.vh = h; this.camera.setViewOffset(w, h, -sh, 0, w, h); }
@@ -579,6 +609,7 @@ export class Poser {
           <label><input type="checkbox" id="pz-limits" checked> Joint limits</label>
           <label><input type="checkbox" id="pz-local" checked> Gizmo follows bone</label>
         </div>
+        <div class="pz-row"><button id="pz-fp">First person view <kbd>V</kbd></button></div>
         <div class="pz-row"><button id="pz-resetall">Reset pose</button><button id="pz-resetbone">Reset bone <kbd>X</kbd></button></div>
       </details>
       <details class="ed-sec" open><summary>Selected bone</summary>
@@ -621,6 +652,7 @@ export class Poser {
     $('mirror').onchange = (e) => { this.opts.mirror = e.target.checked; if (this.opts.mirror && this.sel) { this.#mirrorFrom(this.sel); this.#poses(); this.dirty = true; } };
     $('limits').onchange = (e) => { this.opts.limits = e.target.checked; if (!this.opts.limits) this.clamped.clear(); };
     $('local').onchange = (e) => { this.opts.local = e.target.checked; this.controls.setSpace(this.opts.local ? 'local' : 'world'); };
+    this.fpBtn = $('fp'); $('fp').onclick = () => this.#firstPerson(!this.first);
     $('resetall').onclick = () => this.#reset(null);
     $('resetbone').onclick = () => this.#reset(this.sel);
     // the three sliders turn the bone about its own axes: bend (about its hinge), side, and twist along its length
@@ -712,6 +744,6 @@ export class Poser {
   #status() {
     const el = document.getElementById('pz-status');
     if (!el) return;
-    el.textContent = !this.active ? '' : this.built ? `${this.name} · ${this.frames.length} key${this.frames.length === 1 ? '' : 's'}` : 'loading the model…';
+    el.textContent = !this.active ? '' : this.built ? `${this.name} · ${this.first ? 'first person · ' : ''}${this.frames.length} key${this.frames.length === 1 ? '' : 's'}` : 'loading the model…';
   }
 }
