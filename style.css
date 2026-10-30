@@ -732,3 +732,58 @@ body.touch #rec { top: calc(max(12px, env(safe-area-inset-top)) + 50px); right: 
 .join-note { margin: 0; font: 400 var(--t-xs) var(--sans); color: var(--faint); line-height: 1.4; text-align: left; }
 @media (max-width: 760px) { .friends .chips { justify-content: center; } .join-note { text-align: center; } }
 .mp-hint { font: 400 var(--t-xs) var(--sans); color: var(--faint); line-height: 1.4; }
+
+/* ---------------------------------------------------------- title menu cards */
+.menu-cards { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+.pick-card { background: rgba(10, 16, 26, 0.72); border: 1px solid rgba(255,255,255,0.08); border-radius: 20px; padding: 16px 18px; display: grid; gap: 12px; justify-items: center; backdrop-filter: blur(8px); }
+.mc-label { font: 600 var(--t-xs)/1.2 var(--sans); letter-spacing: var(--track); text-transform: uppercase; color: var(--faint); }
+.menu-cards { display: flex; gap: 18px; flex-wrap: wrap; justify-content: center; }
+.pick-card { background: var(--glass); border: 1px solid var(--edge); border-radius: var(--r); padding: 24px 26px; display: grid; gap: 18px; justify-items: center; backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2); min-width: 270px; }
+.mc-label { font: 600 var(--t-sm)/1.2 var(--sans); letter-spacing: var(--track); text-transform: uppercase; color: var(--faint); }
+.mc-icons { display: grid; grid-template-columns: repeat(3, auto); gap: 16px 18px; justify-content: center; }
+.ic { display: grid; gap: 7px; justify-items: center; background: none; border: none; cursor: pointer; padding: 0; }
+.ic-badge { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; border: 1.5px solid var(--edge); background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.72); transition: border-color .15s, color .15s, transform .15s; }
+.ic-badge svg { width: 30px; height: 30px; } .ic-badge, .face-wrap { transform: none; }
+.ic:hover .ic-badge { border-color: rgba(255,255,255,0.4); background: rgba(255,255,255,0.1); }
+.ic.on .ic-badge { border-color: var(--accent); color: var(--accent); }
+.ic-name { font: 600 10px/1 var(--sans); letter-spacing: .05em; color: var(--faint); text-transform: uppercase; }
+.ic.on .ic-name { color: var(--accent); }
+
+.face-wrap { width: 64px; height: 64px; border-radius: 50%; overflow: hidden; border: 1.5px solid var(--edge); transition: border-color .15s, transform .15s; background: rgba(255,255,255,0.05); display: block; }
+.cast-face { width: 64px; height: 64px; object-fit: cover; object-position: 50% 6%; transform: scale(1.9); transform-origin: 50% 10%; }
+.cast-ic:hover .face-wrap { border-color: rgba(255,255,255,0.4); }
+.cast-ic.on .face-wrap { border-color: var(--accent); }
+
+button.primary.big { font-size: var(--t-md); padding: 16px 46px; border-radius: 999px; font-weight: 700; }
+
+#title .title-inner { justify-items: center; }
+#title .wordmark { width: clamp(260px, 34vw, 440px); }
+@media (max-width: 900px) { .pick-card { min-width: 0; width: min(330px, 92vw); padding: 16px 18px; } .ic-badge, .face-wrap, .cast-face { width: 50px; height: 50px; } .ic-badge svg { width: 24px; height: 24px; } }
+
+
+/* wordmark sits centred over the whole menu, whatever the grid below */
+#title .wordmark { grid-column: 1 / -1; justify-self: center; margin-bottom: 22px; }
+.menu-cards { grid-column: 1 / -1; }
+
+/* three cards across on desktop, wrap on small screens */
+#title .title-inner { max-width: 1240px; }
+.menu-cards { flex-wrap: nowrap; width: 100%; }
+.pick-card { flex: 1; min-width: 0; }
+@media (max-width: 900px) { .menu-cards { flex-wrap: wrap; } .pick-card { flex: 1 1 46%; } }
+@media (max-width: 560px) { .pick-card { flex: 1 1 100%; } }
+
+/* who tryna come: small toggle chips inside the settings row */
+#set-party { display: flex; flex-wrap: wrap; gap: 6px; }
+.togchip { padding: 7px 14px; border-radius: 999px; font: 600 var(--t-xs)/1 var(--sans); border: 1px solid var(--edge); background: rgba(255,255,255,0.04); color: var(--dim); cursor: pointer; }
+.togchip.on { background: var(--accent); border-color: transparent; color: var(--accent-ink); }
+
+/* who tryna come inside the character card */
+.mc-div { width: 100%; height: 1px; background: var(--edge); }
+.mc-sub { font: 600 10px/1 var(--sans); letter-spacing: .08em; color: var(--faint); text-transform: uppercase; }
+.crew-row { display: flex; flex-wrap: wrap; gap: 7px; justify-content: center; }
+.crew-row .togchip { padding: 8px 14px; font-size: 10px; }
+
+/* the global button rule gives every button a pill shape + hover fill —
+   icon buttons opt out */
+.pick-card .ic { border-radius: 0; }
+.pick-card .ic:hover { background: none; }

@@ -97,6 +97,7 @@ settings.relief ??= QUALITY !== 'low';
 settings.hydroPace ??= 4;          // physiological hours per hour of play (src/hydration.js): the medical ratios are real, the clock is compressed
 settings.intro ??= true;           // the opening drive and arrival on a new game (src/intro.js)
 settings.crew ??= false;          // the friends talk about what reaches them (src/crewtalk.js); off until you turn it on
+settings.party ??= null;          // who is coming along — null means the usual two
 settings.mirror ??= Q.shafts > 0;
 settings.mountain ??= Q.soil !== false;
 settings.soil ??= Q.soil !== false;
@@ -277,7 +278,7 @@ if (yours) { world.carSpot = { x: yours.x, z: yours.z }; world.startSpot = yours
   else atv.place(px, pz, cy);
 }
 const avatar = new Character(scene, playerName);
-const party = new Party(world, flora, scene, avatar.lib, playerName);   // the other two friends
+const party = new Party(world, flora, scene, avatar.lib, playerName, settings.party);   // whoever is coming along
 const crewTalk = new CrewTalk(party, settings);   // what they sense, and when it is worth a line (src/crew.js, from Blaize's companions)
 crewTalk.on = settings.crew;
 party.onEvent = (kind, vars) => crewTalk.event(kind, vars);
@@ -296,6 +297,7 @@ for (const b of [hiker, atv, party]) b.solids = (p, r) => camp.collide(p, r);
 for (const b of [hiker, party]) b.floorAt = (x, z) => camp.floorAt(x, z);
 party.onDrop = (x, y, z) => { dump.drop(x, y, z); crewTalk.smell('stink', x, z); };
 const props = new Props({ world, flora, scene, camera, hiker, rig, avatar, hud: null, audio: null });
+hiker.aimSwing = () => props.aimSwing();   // the axe swings sideways at a standing tree, overhead on a lying trunk
 const wood = new Wood(world, flora, scene, props);
 props.wood = wood;
 const coffee = new Coffee(world, scene);
@@ -540,7 +542,7 @@ input.onPress = (code) => {
   if (code === 'KeyT' && !state.paused && !map.open && !invOpen) { if (props.carry) hud.toast('Put the stone down first.'); else { inventory.next(); applySelection(); } }
   if (code === 'KeyH' && !state.paused && !map.open) toggleTogether();
   if (code === 'KeyP' && !map.open) swapPlayer();
-  if (code === 'Escape' && input.mode !== 'kbm') pause(!state.paused); // keyboard Escape releases pointer lock instead
+  if (code === 'Escape' && (input.mode !== 'kbm' || state.paused)) pause(!state.paused); // keyboard Escape releases pointer lock instead
 };
 input.onPad = (name, stickOnly) => {
   if (recorder.pad(name)) return;
@@ -644,7 +646,7 @@ function pause(on) {
   document.body.classList.toggle('playing', state.started && !on);
   $('pause').classList.toggle('hidden', !on);
   if (on) { renderJournal(); keys.clear(); showTab('journal'); $('bubble').classList.add('hidden'); }
-  else { lockPointer(); restartArmed = 0; $('btn-restart').textContent = 'Start over'; }
+  else { lockPointer(); $('btn-restart').textContent = 'Exit to menu'; }
 }
 
 // pause-sheet tabs (LB / RB on a pad)
@@ -799,17 +801,11 @@ function introStep(dt, env) {
 $('btn-start').onclick = () => startFresh();
 $('btn-continue').onclick = () => begin(false);
 $('btn-resume').onclick = () => pause(false);
-// starting over takes two presses, so it can't happen by accident
-let restartArmed = 0;
-$('btn-restart').onclick = () => {
-  if (performance.now() - restartArmed < 4000) { begin(true); return; }
-  restartArmed = performance.now();
-  $('btn-restart').textContent = 'Press again to clear your journal';
-  setTimeout(() => { if (performance.now() - restartArmed >= 3900) $('btn-restart').textContent = 'Start over'; }, 4000);
-};
+// quitting out reloads to the title screen; the save persists so Continue picks up here
+$('btn-restart').onclick = () => location.reload();
 
 // title screen: the date, hour, trailhead and character are picked there and applied by Start hiking
-const pick = { doy: settings.doy, hour: settings.hour, trailhead: trailhead.name, character: playerName };
+const pick = { doy: settings.doy, hour: settings.hour, trailhead: trailhead.name, character: playerName, party: settings.party };
 const booted = { doy: settings.doy, trailhead: trailhead.name, character: playerName };
 buildTitle({
   trailheads: world.places.filter((p) => p.kind === 'trailhead'),
@@ -835,7 +831,7 @@ buildTitle({
 }
 $('btn-friends').onclick = () => net.openPanel();
 function startFresh() {
-  Object.assign(settings, { doy: pick.doy, hour: pick.hour, trailhead: pick.trailhead, character: pick.character });
+  Object.assign(settings, { doy: pick.doy, hour: pick.hour, trailhead: pick.trailhead, character: pick.character, party: pick.party });
   storeJSON('rawah-settings', settings);
   const changed = pick.doy !== booted.doy || pick.trailhead !== booted.trailhead || pick.character !== booted.character;
   if (!changed) { begin(true); return; }
@@ -889,6 +885,23 @@ $('set-depth').onchange = () => {
   if (state.started) save();
   location.reload();     // the depth buffer is chosen when the renderer is made
 };
+// who tryna come: a toggle chip for each friend you are not playing as; null = the usual two, empty = nobody
+{
+  const root = $('set-party');
+  const all = () => (settings.party == null ? Object.keys(CHARACTERS).filter((n) => n !== playerName).slice(0, 2) : settings.party);
+  for (const name of Object.keys(CHARACTERS).filter((n) => n !== playerName)) {
+    const b = document.createElement('button');
+    b.className = 'togchip'; b.textContent = name[0].toUpperCase() + name.slice(1);
+    b.onclick = () => {
+      const cur = all();
+      settings.party = cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name];
+      b.classList.toggle('on');
+      storeJSON('rawah-settings', settings);
+    };
+    b.classList.toggle('on', all().includes(name));
+    root.appendChild(b);
+  }
+}
 $('set-quality').value = settings.quality || 'auto';
 $('set-quality').onchange = () => {
   settings.quality = $('set-quality').value;
@@ -1860,7 +1873,7 @@ function tick(dt, draw = true) {
       else if (e.type === 'land') { audio.thud(e.hard); rig.land(e.fall); }
       else if (e.type === 'splash') { audio.splash(); hud.toast('Brrr — snowmelt water.', 'warn'); lakes.ripple(p.x, p.z, 1.6); waves.drop(p.x, p.z, 0.65, 0.05); waterCells.stir(p.x, p.z, 0.05, onStream(p.x, p.z)); waterCells.foam(p.x, p.z, 0.18); }
       else if (e.type === 'grab') audio.step('rock', 2);
-      else if (e.type === 'strike' && (e.kind === 'chop' || e.kind === 'slash')) props.strike(e);
+      else if (e.type === 'strike' && (e.kind === 'chop' || e.kind === 'saw' || e.kind === 'slash')) props.strike(e);
       else if (e.type === 'toast') hud.toast(e.text, e.warn ? 'warn' : '');
       else if (e.type === 'fall') {
         if (e.severe) rescue(e.why);
@@ -2096,7 +2109,7 @@ function tick(dt, draw = true) {
   precip.update(state.paused ? 0 : dt, camera, weather, [WIND_DIR[0] * wspd, WIND_DIR[1] * wspd], precipLight.copy(sky.hemi.color).multiplyScalar(0.2 + sky.light * 0.75 + weather.flash));
   const tC = tempC(h, p.y);
   grass.clear(...(world.lot ? world.lot.clear : []), camp.fire && [camp.fire.x, camp.fire.z, 1.9], camp.tent && (camp.tent.kind === 'family' ? [camp.tent.x - Math.sin(camp.tent.yaw) * 3.3, camp.tent.z - Math.cos(camp.tent.yaw) * 3.3, camp.tent.x + Math.sin(camp.tent.yaw) * 3.6, camp.tent.z + Math.cos(camp.tent.yaw) * 3.6, 2.3] : [camp.tent.x, camp.tent.z, 3.0]), ...wood.clearings(hiker.pos), ...dump.clearings(hiker.pos), ...gear.clearings());
-  const frost = clamp((1.5 - tC) / 4, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0);
+  const frost = clamp(-tC / 3.5, 0, 1) * (1 - smoothstep(8.5, 10.5, h)) * (h > 3 ? 1 : 0);
   grass.update(camera, hiker, frost, calendar.cure, avatar.heading, renderer);
   if (forbs) { forbs.follow(camera, hiker, frost, calendar.cure); shrubs.follow(camera, hiker, frost, calendar.cure); }
   // the ground remembers: footsteps wear it, rain wets it, sun dries it —

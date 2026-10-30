@@ -131,40 +131,23 @@
   <!-- ============================================================ title -->
   <div id="title" class="screen hidden">
     <div class="title-inner">
-      <div class="title-top">
-        <div class="kicker">Medicine Bow Mountains · Colorado</div>
-        <img class="wordmark" src="./assets/brand/rawah.png" alt="Rawah" />
-        <p class="lede">Hike fifteen kilometres of the real Rawah Wilderness, from lidar, satellite imagery and OpenStreetMap.</p>
-      </div>
+      <img class="wordmark" src="./assets/brand/rawah.png" alt="Rawah" />
 
-      <div class="tr-block">
-        <div class="field-label">Playing as</div>
-        <div class="caro">
-          <button id="cast-prev" class="caro-arrow" aria-label="Previous hiker"><svg viewBox="0 0 16 16"><path d="M10.5 2.5 5 8l5.5 5.5" /></svg></button>
-          <div id="cast" class="cast-card" aria-live="polite">
-            <div class="cast-art"><img class="portrait" alt="" draggable="false" /></div>
-            <div class="cast-name"></div>
-            <div class="cast-where"></div>
-          </div>
-          <button id="cast-next" class="caro-arrow" aria-label="Next hiker"><svg viewBox="0 0 16 16"><path d="M5.5 2.5 11 8l-5.5 5.5" /></svg></button>
+      <div class="menu-cards">
+        <div class="pick-card">
+          <div class="mc-label">Season</div>
+          <div id="chips-season" class="mc-icons" role="group" aria-label="Season"></div>
         </div>
-        <div id="cast-dots" class="cast-dots" role="group" aria-label="Choose hiker"></div>
-      </div>
-      <div class="trip">
-        <div class="trip-row">
-          <div class="field-label">When</div>
-          <div id="chips-season" class="chips" role="group" aria-label="When"></div>
+        <div class="pick-card">
+          <div class="mc-label">Time of day</div>
+          <div id="chips-time" class="mc-icons" role="group" aria-label="Time of day"></div>
         </div>
-        <div class="trip-row">
-          <div class="field-label">What time</div>
-          <div id="chips-time" class="chips" role="group" aria-label="What time"></div>
+        <div class="pick-card">
+          <div class="mc-label">Character</div>
+          <div id="chips-cast" class="mc-icons" role="group" aria-label="Character"></div>
         </div>
-        <div class="trip-row">
-          <div class="field-label">Where</div>
-          <div id="chips-place" class="chips" role="group" aria-label="Where"></div>
-        </div>
-        <div class="trip-row friends-row">
-          <div class="field-label">Friends</div>
+        <div class="pick-card friends-card">
+          <div class="mc-label">Friends</div>
           <div class="friends">
             <div class="chips" role="group" aria-label="Play with friends">
               <button id="btn-host" class="chip">Host a game</button>
@@ -178,10 +161,9 @@
 
       <div class="actions">
         <button id="btn-continue" class="primary hidden">Continue</button>
-        <button id="btn-start" class="primary">Start hiking</button>
+        <button id="btn-start" class="primary big">Begin journey</button>
         <button id="btn-controls" class="ghost">Controls</button>
       </div>
-      <div class="credit">USGS 3DEP lidar · Copernicus Sentinel-2 · © OpenStreetMap contributors via Overture Maps</div>
     </div>
   </div>
 
@@ -215,6 +197,7 @@
           <label class="row"><span>Season</span><select id="set-season"></select></label>
           <label class="row"><span>Weather</span><select id="set-weather"><option value="live">Live forecast</option><option value="clear">Clear</option><option value="fair">Fair cumulus</option><option value="building">Clouds building</option><option value="storm">Thunderstorm</option><option value="severe">Severe thunderstorm</option><option value="showers">Showers</option><option value="overcast">Overcast</option><option value="front">Snow squalls</option><option value="fog">Fog</option></select></label>
           <label class="row"><span>Time of day</span><select id="set-hour"><option value="">Jump to…</option><option value="5.7">Dawn</option><option value="9">Morning</option><option value="12.9">Midday</option><option value="16.5">Afternoon</option><option value="19.2">Dusk</option><option value="22.2">Night</option><option value="1">Deep night</option></select></label>
+          <label class="row"><span>Who tryna come?</span><span id="set-party" class="pickrow"></span></label>
           <label class="row"><span>Tent</span><select id="set-tent"><option value="solo">Backpacking tent</option><option value="family">Family tent · sleeps 6</option></select></label>
           <label class="row"><span>Moon</span><select id="set-moon"><option value="new">New moon (darkest)</option><option value="quarter">Quarter moon</option><option value="full">Full moon</option></select></label>
           <label class="row"><span>Thirst pace</span><input type="range" id="set-hydro" min="1" max="8" step="1" /><b class="val" id="val-hydro"></b></label>
@@ -255,7 +238,7 @@
         <button id="btn-map">Map &amp; quick travel</button>
         <button id="btn-guide">Field guide</button>
         <button id="btn-friends">Play with friends</button>
-        <button id="btn-restart" class="ghost danger">Start over</button>
+        <button id="btn-restart" class="ghost">Exit to menu</button>
       </footer>
     </div>
   </div>

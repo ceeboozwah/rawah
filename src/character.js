@@ -36,13 +36,14 @@ const BULK_SCALE = { corey: 1.3, grant: 1, blaize: 1 };
 
 const ACTION_CLIP = {
   jab: 'Punching', cross: 'Punching (1)', combo: 'Punch Combo', hook: 'Hook', stomp: 'Stomp',
-  chop: 'Stable Sword Outward Slash', slash: 'Stable Sword Outward Slash',   // the one swing clip we have serves axe and machete
+  chop: 'Stable Sword Outward Slash', saw: 'Chop_Start_Fast',     // chop fells standing trees sideways like the fp viewmodel; saw is the authored overhead chop for a lying trunk
+  slash: 'Stable Sword Outward Slash',
   hitSide: 'Big Side Hit', hitKidney: 'Kidney Hit', hitHead: 'Light Hit To Head',
   hitUpper: 'Receiving An Uppercut', hitFace: 'Receive Uppercut To The Face',
   climbOut: 'Swimming To Edge',
 };
 // the part of the clip an action plays, as shares of its length (climbing out starts with swimming; the slash has a long lead-in and follow-through)
-const ACTION_SPAN = { climbOut: [0.25, 1], chop: [0.12, 0.74], slash: [0.12, 0.74] };
+const ACTION_SPAN = { climbOut: [0.25, 1], chop: [0.12, 0.74], saw: [0, 1], slash: [0.12, 0.74] };
 const FIDGETS = ['Wiping Sweat', 'Searching Pockets', 'Swatting Bugs', 'Looking', 'Happy Idle'];
 const GUARD = 4;   // s the fists stay up after a punch
 /**
@@ -230,7 +231,7 @@ export class Character {
     const src = this.lib.get(name);
     if (!RETARGET || !src || !this.target || !this.lib.srcRest) return src;
     let c = this.fitted.get(name);
-    if (!c) { c = retarget(src, this.lib.srcRest, this.target); this.fitted.set(name, c); }
+    if (!c) { c = retarget(src, src.userData?.srcRest || this.lib.srcRest, this.target, src.userData?.bmap); this.fitted.set(name, c); }
     return c;
   }
 
@@ -281,7 +282,7 @@ export class Character {
    */
   #upright(h) {
     const hips = this.hips, neck = this.neck;
-    if (!hips || !neck || !this.group || UPRIGHT_SKIP.test(this.key)) return;
+    if (!hips || !neck || !this.group || h.action || UPRIGHT_SKIP.test(this.key)) return;
     this.group.updateMatrixWorld(true);
     const spine = _v3.subVectors(neck.getWorldPosition(_v2), hips.getWorldPosition(_v1)).normalize();
     if (spine.y > 0.99995) return;
@@ -384,7 +385,8 @@ export class Character {
   #place(dt, h, speed) {
     let want = this.heading;
     if (h.mode === 'climb') want = Math.atan2(-h.wallUp.x, -h.wallUp.y);
-    else if (h.action || this.back || h.face) want = h.yaw;
+    else if (h.action) want = speed > 0.3 ? Math.atan2(-h.vel.x, -h.vel.z) : h.yaw;
+    else if (this.back || h.face) want = h.yaw;
     else if (speed > 0.3) want = Math.atan2(-h.vel.x, -h.vel.z);
     let d = want - this.heading;
     d = Math.atan2(Math.sin(d), Math.cos(d));
