@@ -259,8 +259,11 @@ export class Props {
    */
   #fit(f) {
     const dx = Math.cos(f.yaw), dz = Math.sin(f.yaw), lift = f.lift || 0, N = 16;
-    for (let th = Math.PI / 2 + 0.5; th > 0.9; th -= 0.01) {
-      const st = Math.sin(th), ct = Math.cos(th), by = f.y + 0.3 * st + lift * ct;
+    // a thick butt may need the whole tree raised a little to sit on the ground (never more than 0.4 m)
+    const q = Math.PI / 2, b0 = this.world.height(f.x - dx * lift, f.z - dz * lift);
+    f.rise = clamp(b0 + 0.26 * f.s + 0.02 - 0.1 - (f.y + 0.3) + 0.06, 0, 0.4);
+    for (let th = Math.PI / 2 + 0.5; th > 1.25; th -= 0.01) {
+      const st = Math.sin(th), ct = Math.cos(th), by = f.y + 0.3 * st + lift * ct + f.rise;
       let ok = true;
       for (let i = 0; i <= N && ok; i++) {
         // along the trunk from its butt, which lies `lift` behind the pose origin (the log slid off the stump)
@@ -269,7 +272,8 @@ export class Props {
       }
       if (ok) return th;
     }
-    return 0.9;
+    void q;
+    return 1.25;
   }
 
   /** The stump a felled tree leaves: its own trunk to the height of the cut, flat and pale on top. */
@@ -318,7 +322,7 @@ export class Props {
     _q2.setFromAxisAngle(Y, f.r * Math.PI * 2);
     _q.multiply(_q2);
     // a log that broke at `lift` metres starts on its stump and slides down as it tips
-    f.mesh.setMatrixAt(0, _m.compose(_p.set(f.x, f.y + 0.3 * Math.sin(theta) + (f.lift || 0) * Math.cos(theta), f.z), _q, _s.setScalar(f.s)));
+    f.mesh.setMatrixAt(0, _m.compose(_p.set(f.x, f.y + (f.rise || 0) * Math.sin(theta) + 0.3 * Math.sin(theta) + (f.lift || 0) * Math.cos(theta), f.z), _q, _s.setScalar(f.s)));
     f.mesh.instanceMatrix.needsUpdate = true;
   }
 
@@ -486,7 +490,7 @@ export class Props {
       const ox = p.x - cx, oz = p.z - cz, d = Math.hypot(ox, oz);
       const rad = (0.34 * (1 - t * 0.75) + 0.08) * f.s + r;
       if (d >= rad) continue;
-      const top = f.y + 0.3 * sr + t * (f.H + lift) * cr + (0.34 * (1 - t * 0.75) + 0.08) * f.s;
+      const top = f.y + (f.rise || 0) + 0.3 * sr + t * (f.H + lift) * cr + (0.34 * (1 - t * 0.75) + 0.08) * f.s;
       if (feetY > top - 0.45) { ground = Math.max(ground, top); continue; }
       const n = d || 1e-3;
       p.x = cx + (ox / n || 1) * rad; p.z = cz + (oz / n) * rad;

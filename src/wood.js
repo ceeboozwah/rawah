@@ -173,7 +173,7 @@ export class Wood {
     const axis = new THREE.Vector3(dir.x * Math.sin(rest), Math.cos(rest), dir.z * Math.sin(rest));
     // the butt is where the trunk's cut face lies: `lift` behind the pose origin along the trunk, where it slid off the stump
     const lift = f.lift || 0;
-    const base = new THREE.Vector3(f.x - dir.x * lift * Math.sin(rest), f.y + 0.3 * Math.sin(rest), f.z - dir.z * lift * Math.sin(rest));
+    const base = new THREE.Vector3(f.x - dir.x * lift * Math.sin(rest), f.y + (f.rise || 0) + 0.3 * Math.sin(rest), f.z - dir.z * lift * Math.sin(rest));
     const t = { f, dir, L, r0, n, cutCount: 0, prog: 0, axis, base, intact: true, mesh: null, stack: null, count: 0, bark: barkUV(BARK_OF[f.kind]) };
     f.trunk = t;
     this.trunks.push(t);
