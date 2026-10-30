@@ -263,7 +263,8 @@ export class Props {
       const st = Math.sin(th), ct = Math.cos(th), by = f.y + 0.3 * st + lift * ct;
       let ok = true;
       for (let i = 0; i <= N && ok; i++) {
-        const a = f.H * i / N, rad = Math.max(0.03, 0.26 * f.s * (1 - i / N) + 0.02);
+        // along the trunk from its butt, which lies `lift` behind the pose origin (the log slid off the stump)
+        const a = -lift + (f.H + lift) * i / N, rad = Math.max(0.03, 0.26 * f.s * (1 - i / N) + 0.02);
         if (by + a * ct < this.world.height(f.x + dx * a * st, f.z + dz * a * st) + rad - 0.1) ok = false;
       }
       if (ok) return th;
@@ -477,14 +478,15 @@ export class Props {
   #lying(p, r, feetY) {
     let ground = -Infinity;
     for (const f of this.lying) {
-      const dx = Math.cos(f.yaw), dz = Math.sin(f.yaw), len = f.H * Math.sin(f.rest);
-      const px = p.x - f.x, pz = p.z - f.z;
+      const dx = Math.cos(f.yaw), dz = Math.sin(f.yaw), sr = Math.sin(f.rest), cr = Math.cos(f.rest), lift = f.lift || 0;
+      const len = (f.H + lift) * sr, x0 = f.x - dx * lift * sr, z0 = f.z - dz * lift * sr;
+      const px = p.x - x0, pz = p.z - z0;
       const t = clamp((px * dx + pz * dz) / len, 0, 1);
-      const cx = f.x + dx * len * t, cz = f.z + dz * len * t;
+      const cx = x0 + dx * len * t, cz = z0 + dz * len * t;
       const ox = p.x - cx, oz = p.z - cz, d = Math.hypot(ox, oz);
       const rad = (0.34 * (1 - t * 0.75) + 0.08) * f.s + r;
       if (d >= rad) continue;
-      const top = f.y + 0.3 * Math.sin(f.rest) + (f.lift || 0) * Math.cos(f.rest) + t * f.H * Math.cos(f.rest) + (0.34 * (1 - t * 0.75) + 0.08) * f.s;
+      const top = f.y + 0.3 * sr + t * (f.H + lift) * cr + (0.34 * (1 - t * 0.75) + 0.08) * f.s;
       if (feetY > top - 0.45) { ground = Math.max(ground, top); continue; }
       const n = d || 1e-3;
       p.x = cx + (ox / n || 1) * rad; p.z = cz + (oz / n) * rad;
