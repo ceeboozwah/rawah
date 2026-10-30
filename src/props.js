@@ -248,7 +248,27 @@ export class Props {
     else this.#stump(x, e, z, s);
     const shade = 0.82 + r * 0.3, height = src.boundingBox.max.y;
     const a = Math.atan2(dz, dx) + (((Math.sin(x * 12.9898 + z * 78.233) * 43758.5453) % 1 + 1) % 1 - 0.5) * 0.5, lift = log ? CUT_H : 0;
-    this.falling.push({ mesh, geo, kind, vi, x, y: e - 0.15, lift, z, s, r, shade, yaw: a, t: 0, dur: clamp(1.7 + height * s * 0.055, 2.1, 3.4), H: height * s - lift });
+    const f = { mesh, geo, kind, vi, x, y: e - 0.15, lift, z, s, r, shade, yaw: a, t: 0, dur: clamp(1.7 + height * s * 0.055, 2.1, 3.4), H: height * s - lift, rest: REST };
+    f.rest = this.#fit(f);
+    this.falling.push(f);
+  }
+
+  /**
+   * The angle from vertical a felled tree comes to rest at: it settles down onto the ground along its whole length,
+   * held up by the butt or by the highest bump under it, so it neither hovers nor sinks (a downhill fall tips past flat).
+   */
+  #fit(f) {
+    const dx = Math.cos(f.yaw), dz = Math.sin(f.yaw), lift = f.lift || 0, N = 16;
+    for (let th = Math.PI / 2 + 0.5; th > 0.9; th -= 0.01) {
+      const st = Math.sin(th), ct = Math.cos(th), by = f.y + 0.3 * st + lift * ct;
+      let ok = true;
+      for (let i = 0; i <= N && ok; i++) {
+        const a = f.H * i / N, rad = Math.max(0.03, 0.26 * f.s * (1 - i / N) + 0.02);
+        if (by + a * ct < this.world.height(f.x + dx * a * st, f.z + dz * a * st) + rad - 0.1) ok = false;
+      }
+      if (ok) return th;
+    }
+    return 0.9;
   }
 
   /** The stump a felled tree leaves: its own trunk to the height of the cut, flat and pale on top. */
@@ -457,14 +477,14 @@ export class Props {
   #lying(p, r, feetY) {
     let ground = -Infinity;
     for (const f of this.lying) {
-      const dx = Math.cos(f.yaw), dz = Math.sin(f.yaw), len = f.H * Math.sin(REST);
+      const dx = Math.cos(f.yaw), dz = Math.sin(f.yaw), len = f.H * Math.sin(f.rest);
       const px = p.x - f.x, pz = p.z - f.z;
       const t = clamp((px * dx + pz * dz) / len, 0, 1);
       const cx = f.x + dx * len * t, cz = f.z + dz * len * t;
       const ox = p.x - cx, oz = p.z - cz, d = Math.hypot(ox, oz);
       const rad = (0.34 * (1 - t * 0.75) + 0.08) * f.s + r;
       if (d >= rad) continue;
-      const top = f.y + 0.3 * Math.sin(REST) + t * f.H * Math.cos(REST) + (0.34 * (1 - t * 0.75) + 0.08) * f.s;
+      const top = f.y + 0.3 * Math.sin(f.rest) + (f.lift || 0) * Math.cos(f.rest) + t * f.H * Math.cos(f.rest) + (0.34 * (1 - t * 0.75) + 0.08) * f.s;
       if (feetY > top - 0.45) { ground = Math.max(ground, top); continue; }
       const n = d || 1e-3;
       p.x = cx + (ox / n || 1) * rad; p.z = cz + (oz / n) * rad;
@@ -522,7 +542,7 @@ export class Props {
       for (const f of [...this.falling, ...this.lying]) {
         if (Math.abs(f.x - x) > 0.05 || Math.abs(f.z - z) > 0.05) continue;
         f.y += d;
-        if (f.t >= f.dur) this.#poseTree(f, REST);
+        if (f.t >= f.dur) { f.rest = this.#fit(f); this.#poseTree(f, f.rest); }
       }
     }
     if (moved) this.#writeStumps();
@@ -593,7 +613,7 @@ export class Props {
       f.t += dt;
       const u = Math.min(1, f.t / f.dur);
       // slow at first, then gathering: the last quarter is the crash
-      const theta = REST * Math.pow(u, 2.4);
+      const theta = f.rest * Math.pow(u, 2.4);
       this.#poseTree(f, theta);
       if (u > 0.4) this.#crush(f, theta);
       if (u >= 1) {
@@ -713,8 +733,9 @@ export class Props {
       if (!this.flora.meshes[kind]?.[vi]) continue;
       const { mesh, height } = this.flora.treeMesh(kind, vi, shade);
       this.scene.add(mesh);
-      const f = { mesh, kind, vi, x, y, z, s, r, yaw, shade, t: 99, dur: 1, H: height * s };
-      this.#poseTree(f, REST);
+      const f = { mesh, kind, vi, x, y, z, s, r, yaw, shade, t: 99, dur: 1, H: height * s, rest: REST };
+      f.rest = this.#fit(f);
+      this.#poseTree(f, f.rest);
       this.lying.push(f);
     }
     for (const [kind, vi, x, e, z, s, r, ...sides] of d.stumpCuts || []) if (this.flora.meshes[kind]?.[vi]) this.#makeStump(kind, vi, x, e, z, s, r, sides);
@@ -748,8 +769,9 @@ export class Props {
       if (!this.flora.meshes[kind]?.[vi]) continue;
       const { mesh, height } = this.flora.treeMesh(kind, vi, shade);
       this.scene.add(mesh);
-      const f = { mesh, kind, vi, x, y, z, s, r, yaw, shade, t: 99, dur: 1, H: height * s };
-      this.#poseTree(f, REST);
+      const f = { mesh, kind, vi, x, y, z, s, r, yaw, shade, t: 99, dur: 1, H: height * s, rest: REST };
+      f.rest = this.#fit(f);
+      this.#poseTree(f, f.rest);
       this.lying.push(f);
     }
     for (const [kind, vi, x, e, z, s, r, ...sides] of d.stumpCuts || []) if (this.flora.meshes[kind]?.[vi]) this.#makeStump(kind, vi, x, e, z, s, r, sides);

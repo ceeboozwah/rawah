@@ -169,8 +169,9 @@ export class Wood {
     const useful = r0 > R_USABLE ? ((r0 - R_USABLE) / (r0 - 0.02)) * L : SEG;
     const n = Math.max(1, Math.floor(useful / SEG));
     const dir = new THREE.Vector3(Math.cos(f.yaw), 0, Math.sin(f.yaw));
-    const axis = new THREE.Vector3(dir.x * Math.sin(REST), Math.cos(REST), dir.z * Math.sin(REST));
-    const base = new THREE.Vector3(f.x, f.y + 0.3 * Math.sin(REST) + (f.lift || 0) * Math.cos(REST), f.z);
+    const rest = f.rest ?? REST;
+    const axis = new THREE.Vector3(dir.x * Math.sin(rest), Math.cos(rest), dir.z * Math.sin(rest));
+    const base = new THREE.Vector3(f.x, f.y + 0.3 * Math.sin(rest) + (f.lift || 0) * Math.cos(rest), f.z);
     const t = { f, dir, L, r0, n, cutCount: 0, prog: 0, axis, base, intact: true, mesh: null, stack: null, count: 0, bark: barkUV(BARK_OF[f.kind]) };
     f.trunk = t;
     this.trunks.push(t);
