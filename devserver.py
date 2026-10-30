@@ -36,6 +36,9 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
         if self.path == '/dev/placements':
             self.save_placements()
             return
+        if self.path == '/dev/anim':
+            self.save_anim()
+            return
         if not self.path.startswith('/crew/'):
             self.send_error(404)
             return
@@ -92,6 +95,47 @@ def _save_placements(self):
 
 
 NoCacheHandler.save_placements = _save_placements
+
+
+def _save_anim(self):
+    """/dev/anim: write a hand-made animation from the pose editor to data/anims/<name>.json and keep data/anims/index.json (the
+    list the editor offers) in step. Only from this machine, and only a well-formed animation."""
+    import re
+    if self.client_address[0] not in ('127.0.0.1', '::1'):
+        self.send_error(403)
+        return
+    try:
+        d = json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)))
+        name = d.get('name', '')
+        assert re.fullmatch(r'[A-Za-z0-9_-]{1,40}', name)
+        assert isinstance(d.get('keys'), list) and 0 < d.get('duration', 0) <= 60
+        for k in d['keys']:
+            assert isinstance(k.get('t'), (int, float)) and isinstance(k.get('rot', {}), dict)
+            for q in k.get('rot', {}).values():
+                assert isinstance(q, list) and len(q) == 4 and all(isinstance(v, (int, float)) for v in q)
+    except Exception:
+        self.send_error(400, 'not an animation')
+        return
+    folder = os.path.join(ROOT, 'data', 'anims')
+    os.makedirs(folder, exist_ok=True)
+    keys = ',\n'.join('  ' + json.dumps(k, separators=(',', ':')) for k in d['keys'])
+    head = json.dumps({'version': 1, 'name': name, 'duration': d['duration'], 'loop': bool(d.get('loop', True)), 'smooth': bool(d.get('smooth', True))}, separators=(',', ':'))
+    text = head[:-1] + ',\n"keys":[\n' + keys + '\n]}\n'
+    path = os.path.join(folder, name + '.json')
+    with open(path + '.tmp', 'w') as f:
+        f.write(text)
+    os.replace(path + '.tmp', path)
+    names = sorted(n[:-5] for n in os.listdir(folder) if n.endswith('.json') and n != 'index.json')
+    with open(os.path.join(folder, 'index.json'), 'w') as f:
+        f.write(json.dumps(names))
+    self.send_response(200)
+    self.send_header('Content-Type', 'application/json')
+    self.send_header('Content-Length', '2')
+    self.end_headers()
+    self.wfile.write(b'ok')
+
+
+NoCacheHandler.save_anim = _save_anim
 
 
 if __name__ == '__main__':

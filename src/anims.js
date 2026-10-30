@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { bake } from './posebake.js';
 
 // The Mixamo clip library. Every clip is one FBX in assets/characters/anims/,
 // loaded on demand and cleaned up so it can be driven by the hiker instead of
@@ -197,7 +198,13 @@ export class AnimLibrary {
 
   #one(name) {
     if (!this.pending.has(name)) {
-      const job = name.startsWith('Chop_')
+      const job = name.startsWith('pose/')
+        // a hand-made animation from the pose editor: keyframes in data/anims, baked against the Mixamo skeleton
+        ? this.#one('Neutral Idle').then(async () => {
+            const data = await (await fetch(`data/anims/${encodeURIComponent(name.slice(5))}.json`, { cache: 'no-store' })).json();
+            this.clips.set(name, prepare(name, bake(data, this.srcRest)));
+          })
+        : name.startsWith('Chop_')
         ? new GLTFLoader().loadAsync(`${DIR}chop.glb`).then((g) => {
             if (!this.chopRest) this.chopRest = restOf(g.scene);
             const clip = g.animations.find((a) => a.name === name);

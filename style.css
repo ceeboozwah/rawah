@@ -793,3 +793,19 @@ button.primary.big { font-size: var(--t-md); padding: 16px 46px; border-radius: 
 .friends-card .friends { width: 100%; }
 .friends-card .friends .chips { flex-direction: column; align-items: stretch; flex-wrap: wrap; gap: 8px; }
 .friends-card .friends .chip, .friends-card #join-code { width: 100%; flex: none; border-radius: 999px; padding: 10px 14px; }
+
+/* the pose editor (src/poser.js) shares the world editor's bar and panel */
+.pz-panel { width: 290px; }
+.pz-row { display: flex; gap: 6px; margin: 6px 0; flex-wrap: wrap; }
+.pz-row button, .pz-bl button, .pz-keys button { font: 500 var(--t-xs) var(--sans); color: var(--dim); background: rgba(255, 255, 255, 0.06); border: 1px solid var(--edge); border-radius: 8px; padding: 5px 9px; cursor: pointer; }
+.pz-row button:hover, .pz-bl button:hover, .pz-keys button:hover { color: var(--ink); }
+.pz-bl { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 0 6px; }
+.pz-bl button.on, .pz-keys button.on { background: var(--select); border-color: var(--accent); color: var(--ink); }
+.pz-bl button.hot { border-color: #ff4a3a; color: #ff8a7a; }
+.pz-keys { display: flex; flex-wrap: wrap; gap: 4px; min-height: 22px; }
+.pz-keys small { color: var(--faint); font: 500 var(--t-xs) var(--sans); }
+.pz-sl { display: grid; grid-template-columns: 54px 1fr 40px; align-items: center; gap: 6px; font: 500 var(--t-xs) var(--sans); color: var(--dim); margin: 3px 0; }
+.pz-sl input[type=range] { width: 100%; }
+.pz-sl output { text-align: right; color: var(--faint); }
+.pz-panel select { width: 100%; font: 500 var(--t-sm) var(--sans); color: var(--ink); background: rgba(255, 255, 255, 0.07); border: 1px solid var(--edge); border-radius: 8px; padding: 6px 8px; box-sizing: border-box; }
+#pz-limit { color: var(--faint); font: 500 var(--t-xs) var(--sans); }

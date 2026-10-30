@@ -44,6 +44,7 @@ import { Gear, buildCanteen, buildBladder, buildPot, buildStraw, buildFilter, bu
 import { Inventory, InventoryUI, ITEMS } from './inventory.js';
 import { Placements } from './placements.js';
 import { Editor } from './editor.js';
+import { Poser } from './poser.js';
 import { Net, normCode } from './net.js';
 import { renderIcons } from './icons.js';
 import { buildTool } from './tools.js';
@@ -255,7 +256,7 @@ if (forbs) scene.add(forbs.mesh, shrubs.mesh);
 // hand-placed assets (data/placements.json, made with the world editor) and, on a local host, the editor itself (F2)
 const placements = new Placements(world, flora, scene, { models });
 await placements.load();
-let editor = null;
+let editor = null, poser = null;
 const boxels = new Boxels(world, { n: 512 });
 BOXEL.value = boxels.texture;
 let bxLast = null, bxAcc = 0, bxRain = 0;
@@ -518,11 +519,14 @@ function friendFrame(r, dt) {
 }
 for (const o of [fireworks, coffee, breakfast, props, fishing, wood]) o.onAct = (k, d) => net.event(k, d);
 if (DEV) editor = new Editor({ renderer, camera, scene, world, flora, placements, keys, toast: (t, k) => hud.toast(t, k), mind });
+if (DEV) poser = new Poser({ renderer, camera, scene, world, hiker, lib: avatar.lib, keys, toast: (t, k) => hud.toast(t, k) });
 if (isTouch) input.enableTouch(document.body);
 const recorder = new Recorder({ canvas: renderer.domElement, audio, hud, pause: () => { if (state.started && !state.paused) pause(true); }, resume: () => pause(false) });
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.started && !state.paused) pause(true); });
 input.onPress = (code) => {
-  if (code === 'F2' && editor && state.started && !state.paused && !state.intro && !state.travel && !map.open && !invOpen) { editor.toggle(); return; }
+  if (code === 'F2' && editor && state.started && !state.paused && !state.intro && !state.travel && !map.open && !invOpen) { poser?.toggle(false); editor.toggle(); return; }
+  if (code === 'F3' && poser && state.started && !state.paused && !state.intro && !state.travel && !map.open && !invOpen) { editor?.toggle(false); poser.toggle(); return; }
+  if (poser?.active && poser.onKey(code)) return;
   if (editor?.active && editor.onKey(code)) return;
   if (state.intro) { intro.skip(); return; }
   if (state.ask) {
@@ -562,9 +566,9 @@ input.onPad = (name, stickOnly) => {
   if (screen === $('pause') && (name === 'LB' || name === 'RB')) { cycleTab(name === 'RB' ? 1 : -1); return; }
   if (screen) menuPad(screen, name);
 };
-renderer.domElement.addEventListener('click', () => { if (state.started && !state.paused && !editor?.active) lockPointer(); });
+renderer.domElement.addEventListener('click', () => { if (state.started && !state.paused && !editor?.active && !poser?.active) lockPointer(); });
 document.addEventListener('pointerlockchange', () => {
-  if (document.pointerLockElement !== renderer.domElement && state.started && !map.open && !invOpen && !editor?.active && !state.sleeping && !state.travel && !state.intro) pause(true);
+  if (document.pointerLockElement !== renderer.domElement && state.started && !map.open && !invOpen && !editor?.active && !poser?.active && !state.sleeping && !state.travel && !state.intro) pause(true);
 });
 
 /** Gamepad focus for menus: D-pad or stick moves, A presses, left/right adjusts sliders, B backs out. */
@@ -1771,6 +1775,10 @@ function applySelection(announce = true) {
     msg = 'World builder · [1] select · [2] place · [3] erase · [4] sculpt · F2 closes';
     if (editor && !editor.active && state.started && !state.paused && !state.intro) { editor.fromPack = true; editor.toggle(true); }
   } else if (editor?.active && editor.fromPack) { editor.fromPack = false; editor.toggle(false); }
+  if (id === 'poser') {
+    msg = 'Pose editor · click a dot on the skeleton, turn it with the gizmo · F3 closes';
+    if (poser && !poser.active && state.started && !state.paused && !state.intro) { poser.fromPack = true; editor?.toggle(false); poser.toggle(true); }
+  } else if (poser?.active && poser.fromPack) { poser.fromPack = false; poser.toggle(false); }
   props.setTool(tool);
   invUI.render();
   if (announce) { hud.toast(msg); invUI.flash(it ? it.name : 'Bare hands'); }
@@ -1812,7 +1820,7 @@ if (sessionStorage.getItem('rawah-autostart')) { sessionStorage.removeItem('rawa
 function tick(dt, draw = true) {
   t += dt;
   let gameMin = 0;
-  const live = state.started && !state.paused && !state.sleeping && !state.rescue && !state.travel && !map.open && !togetherOpen && !invOpen && !editor?.active;
+  const live = state.started && !state.paused && !state.sleeping && !state.rescue && !state.travel && !map.open && !togetherOpen && !invOpen && !editor?.active && !poser?.active;
   if (state.sleeping) {
     state.sleeping.t += dt;
     if (state.sleeping.t > 2.2) finishSleep();
@@ -2021,6 +2029,12 @@ function tick(dt, draw = true) {
     cullView();
     flora.update(focus, 1, dt);
     audio.engine(!r.done && r.engine > 0.05, clamp(r.engine / 18, 0, 1), r.engine > 0.5 ? 0.45 : 0);
+  } else if (poser?.active) {
+    // the pose editor: the camera orbits a character on a stage in front of where you stood
+    poser.update(dt);
+    focus = poser.focus;
+    cullView();
+    flora.update(focus, 1, dt);
   } else if (editor?.active) {
     // the world editor: a free camera, trees streamed around it
     editor.update(dt);
@@ -2042,7 +2056,7 @@ function tick(dt, draw = true) {
     if (floraTimer > 0.12) floraTimer = 0;
   }
   eye.copy(camera.position);
-  if (!editor?.active) placements.update(camera);
+  if (!editor?.active && !poser?.active) placements.update(camera);
   net.update(dt, camera);
   fishing.ghostUpdate(dt, (id) => net.remotes.get(id)?.b);
 
@@ -2258,7 +2272,7 @@ if (DEV) {
     benchQ(o) { return boxels.benchQ(o); },
     benchMulti(o) { return boxels.benchMulti(o); },
     benchRain(o) { return boxels.benchRain(o); },
-    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, fields, hydration, gear, inventory, placements, net, get editor() { return editor; }, forbs, shrubs, invUI, smokeCol, flare,
+    plume, waves, waterAt, waterCells, lightning, shafts, mist, leafFall, mirror, tshadow, crewTalk, intro, fields, hydration, gear, inventory, placements, net, get editor() { return editor; }, get poser() { return poser; }, playPose: async (name) => { await avatar.lib.load([`pose/${name}`]); hiker.emote = `pose/${name}`; }, forbs, shrubs, invUI, smokeCol, flare,
     benchPlume(o) { return plume.smoke.bench(o); },
     begin, tick, save, hiker, rig, avatar, party, route, gmap: map, input, props, mind, guide, wood, fireworks, coffee, dump, breakfast, camp, atv, fishing, roast, sky, grass, horizon, recorder, together: (o) => toggleTogether(o),
     hit(kind = 'side') { return hiker.receiveHit(kind); },
