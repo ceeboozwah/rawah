@@ -385,12 +385,15 @@ export class Poser {
     const r = this.renderer.domElement.getBoundingClientRect();
     this.ray.setFromCamera({ x: ((e.clientX - r.left) / r.width) * 2 - 1, y: -((e.clientY - r.top) / r.height) * 2 + 1 }, this.camera);
     const hit = this.ray.intersectObjects(this.markers.children, false)[0];
-    this.#select(hit ? hit.object.userData.bone : null);
+    if (hit) { this.#select(hit.object.userData.bone); return; }
+    // empty space: dragging turns the view round the character (a click without a drag lets go of the bone)
+    this.drag = { x: e.clientX, y: e.clientY, pan: false, left: true, moved: 0 };
   }
 
   #move(e) {
     if (!this.drag || !this.active) return;
     const dx = e.clientX - this.drag.x, dy = e.clientY - this.drag.y;
+    this.drag.moved = (this.drag.moved || 0) + Math.abs(dx) + Math.abs(dy);
     this.drag.x = e.clientX; this.drag.y = e.clientY;
     if (this.drag.pan) {
       const k = this.cam.dist * 0.0014;
@@ -401,7 +404,10 @@ export class Poser {
     }
   }
 
-  #up() { this.drag = null; }
+  #up() {
+    if (this.drag?.left && this.drag.moved < 4) this.#select(null);
+    this.drag = null;
+  }
 
   // ------------------------------------------------------------------ per frame
   update(dt) {
@@ -413,6 +419,11 @@ export class Poser {
       this.#syncTime();
     }
     if (this.dirty) this.#apply();
+    // the arrow keys (or A and D) turn the view round, up and down tilt it, and W and S come closer or back off
+    if (!/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '')) {
+      const k = this.keys, turn = ((k.has('ArrowLeft') || k.has('KeyA') ? 1 : 0) - (k.has('ArrowRight') || k.has('KeyD') ? 1 : 0)) * dt * 2, tilt = ((k.has('ArrowUp') ? 1 : 0) - (k.has('ArrowDown') ? 1 : 0)) * dt * 1.2, zoom = ((k.has('KeyS') ? 1 : 0) - (k.has('KeyW') ? 1 : 0)) * dt * 1.5;
+      this.cam.yaw += turn; this.cam.pitch = Math.min(1.4, Math.max(-0.6, this.cam.pitch + tilt)); this.cam.dist = Math.min(12, Math.max(0.6, this.cam.dist * (1 + zoom)));
+    }
     this.#orbit();
     for (const e of this.tb.values()) {
       if (!e.marker) continue;
@@ -585,7 +596,7 @@ export class Poser {
         <div class="pz-row"><button id="pz-save" class="ed-save">Save</button></div>
         <select id="pz-saved"></select>
         <div class="pz-row"><button id="pz-load">Open</button></div>
-        <p class="ed-help">Saved to data/anims/. The game plays it as <b>pose/name</b>. Right-drag orbits, Shift + right-drag pans, scroll zooms, click a dot to pick a bone.</p>
+        <p class="ed-help">Saved to data/anims/. The game plays it as <b>pose/name</b>. Drag on empty space (or right-drag) to turn all the way round the character, Shift + right-drag pans, scroll or W/S zooms, arrow keys or A/D turn the view, click a dot to pick a bone.</p>
       </details>`;
     document.body.appendChild(panel);
     this.panel = panel;
