@@ -787,3 +787,9 @@ button.primary.big { font-size: var(--t-md); padding: 16px 46px; border-radius: 
    icon buttons opt out */
 .pick-card .ic { border-radius: 0; }
 .pick-card .ic:hover { background: none; }
+
+/* the friends card in the title's menu cards: a column that fits the card */
+.friends-card { align-content: start; min-width: 190px; }
+.friends-card .friends { width: 100%; }
+.friends-card .friends .chips { flex-direction: column; align-items: stretch; flex-wrap: wrap; gap: 8px; }
+.friends-card .friends .chip, .friends-card #join-code { width: 100%; flex: none; border-radius: 999px; padding: 10px 14px; }
