@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { straighten } from './anims.js';
 import { Character } from './character.js';
+import { buildCanteen, buildBladder, buildPot, buildStraw, buildRadio, buildFilter } from './gear.js';
 import { sampleKeys, deltasFromClip } from './posebake.js';
 
 // The pose editor: developer tools, local host only (F3 toggles it, or the pose editor item on the quick bar).
@@ -16,7 +17,10 @@ import { sampleKeys, deltasFromClip } from './posebake.js';
 // rig, so an animation made on one character fits all five.
 
 const NAMES = ['blaize', 'grant', 'corey', 'taylor', 'trey'];
+// what can be put in the right hand: the tools, and the things the game puts there (the same objects, through `Character.setItem`)
 const TOOLS = ['fists', 'axe', 'machete', 'fireworks'];
+const ITEMS = { canteen: buildCanteen, bladder: buildBladder, pot: buildPot, 'LifeStraw': buildStraw, radio: buildRadio, 'pump filter': buildFilter };
+const HELD = [...TOOLS, ...Object.keys(ITEMS)];
 const D2R = Math.PI / 180;
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _q3 = new THREE.Quaternion();
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
@@ -229,12 +233,21 @@ export class Poser {
       this.markers.add(m);
       e.marker = m;
     }
-    c.setTool?.(this.tool);
+    this.#hold_();
     this.#fresh();
     this.built = true;
     this.#refreshBones();
     this.#status();
     return true;
+  }
+
+  /** Put the chosen thing in the character's hand: a tool, or one of the game's props. */
+  #hold_() {
+    const c = this.char;
+    if (!c?.ready) return;
+    const make = ITEMS[this.tool];
+    c.setTool?.(make ? 'fists' : this.tool);
+    c.setItem?.(make ? make() : null);
   }
 
   // ------------------------------------------------------------------ the pose
@@ -559,7 +572,7 @@ export class Poser {
       <details class="ed-sec" open><summary>Character</summary>
         <div class="ed-grid">
           <label class="ed-note">Who<select id="pz-char">${NAMES.map((n) => `<option>${n}</option>`).join('')}</select></label>
-          <label class="ed-note">In hand<select id="pz-tool">${TOOLS.map((n) => `<option>${n}</option>`).join('')}</select></label>
+          <label class="ed-note">In hand<select id="pz-tool">${HELD.map((n) => `<option>${n}</option>`).join('')}</select></label>
         </div>
         <div class="ed-opts">
           <label><input type="checkbox" id="pz-mirror"> Mirror sides</label>
@@ -604,7 +617,7 @@ export class Poser {
     this.pbtn = $('play'); this.nameInput = $('name'); this.clipSel = $('clip'); this.savedSel = $('saved');
     bar.querySelector('#pz-close').onclick = () => this.toggle(false);
     $('char').onchange = (e) => { this.name = e.target.value; this.#load(this.name); };
-    $('tool').onchange = (e) => { this.tool = e.target.value; this.char?.setTool?.(this.tool); };
+    $('tool').onchange = (e) => { this.tool = e.target.value; this.#hold_(); };
     $('mirror').onchange = (e) => { this.opts.mirror = e.target.checked; if (this.opts.mirror && this.sel) { this.#mirrorFrom(this.sel); this.#poses(); this.dirty = true; } };
     $('limits').onchange = (e) => { this.opts.limits = e.target.checked; if (!this.opts.limits) this.clamped.clear(); };
     $('local').onchange = (e) => { this.opts.local = e.target.checked; this.controls.setSpace(this.opts.local ? 'local' : 'world'); };
