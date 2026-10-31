@@ -4,6 +4,7 @@ import { ALBEDO, ALBEDO_UNIFORMS, albedoUniforms, WORLEY_GLSL, NEAR_NORMAL, NEAR
 import { withAtmosphere } from './atmosphere.js';
 import { Sculpt, SCULPT_GLSL, LIMIT } from './sculpt.js';
 import { Channels, CHANNEL_GLSL } from './channels.js';
+import { MEADOW_COLOR } from './meadow.js';
 import { CULL } from './culling.js';
 
 // Continuous distance-dependent level of detail (CDLOD, after Strugar 2010).
@@ -196,6 +197,7 @@ export class CDLODTerrain {
           #ifdef NEAR_DETAIL
           ${NEAR_COLOR}
           #endif
+          ${MEADOW_COLOR}
           ${BOXEL_COLOR}`);
     };
     mat.customProgramCacheKey = () => 'rawah-cdlod';

@@ -122,6 +122,9 @@ vec3 ACESFilmicToneMapping( vec3 color ) {
   c = mix( c, c * c * ( 3.0 - 2.0 * c ), 0.12 );
   l = dot( c, vec3( 0.2126, 0.7152, 0.0722 ) );
   c *= mix( vec3( 0.95, 1.0, 1.06 ), vec3( 1.06, 1.0, 0.92 ), smoothstep( 0.08, 0.75, l ) );
+  // the eye's night vision: very dark things lose their colour and lean blue (a moonlit hillside is grey-blue, not orange-brown)
+  l = dot( c, vec3( 0.2126, 0.7152, 0.0722 ) );
+  c = mix( l * vec3( 0.86, 0.98, 1.22 ), c, smoothstep( 0.004, 0.035, l ) * 0.7 + 0.3 );
   return clamp( c, 0.0, 1.0 );
 }
 `;

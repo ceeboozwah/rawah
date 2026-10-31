@@ -220,7 +220,10 @@ export class Sky {
     if (useMoon) this.sun.intensity *= 1 - wx.cloud * 0.85;
     this.hemi.color.copy(u.uZenith.value).lerp(this._a.setRGB(1, 1, 1), 0.35 + overcast * 0.3);
     this.hemi.groundColor.setRGB(0.42, 0.38, 0.32).multiplyScalar(0.25 + day * 0.75);
-    this.hemi.intensity = lerp(0.42, 1.25, day) * (1 + overcast * 0.3) * (1 - wx.precip * 0.12) + wx.flash * 4;   // flat light comes from everywhere, so the sky does more of the work
+    // at night the sky fill is cool: the neutral grey it had left the ground exactly its own (orange-tan) colour, which the grade then boosted
+    this.hemi.color.lerp(this._a.setRGB(0.42, 0.52, 0.95), u.uNight.value * 0.85);
+    this.hemi.groundColor.lerp(this._a.setRGB(0.1, 0.12, 0.2), u.uNight.value * 0.8);
+    this.hemi.intensity = lerp(0.42, 1.25, day) * (1 + overcast * 0.3) * (1 - wx.precip * 0.12) * (1 - 0.22 * u.uNight.value) + wx.flash * 4;   // flat light comes from everywhere, so the sky does more of the work
     this.fog.color.copy(u.uHorizon.value).lerp(u.uZenith.value, 0.15);
     // haze, valley fog, and the grey wall of a squall
     this.fog.density = 0.00008 + wx.fog * 0.0021 + wx.precip * (0.00045 + wx.snowK * 0.0011) + overcast * 0.00008;

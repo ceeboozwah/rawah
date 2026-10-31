@@ -43,6 +43,9 @@ const sm = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t
  * the edge leading across the trunk. `R` comes in from the right and sweeps left; `L` comes in from the left and
  * sweeps right, every position mirrored and the head turned so the edge still leads.
  */
+// the axe at rest in first person: the haft rising from the lower right, the head up and a little in toward the middle, the edge turned left
+// and forward so you see the blade in profile, as held in a first-person woodcutting game
+const AXE_REST = [0.25, -0.43, -0.6, -0.2, 2.2, 0.06];
 const SIDE = (() => {
   const up = new THREE.Vector3(0, 1, 0);
   const euler = (m) => { const e = new THREE.Euler().setFromRotationMatrix(m, 'YXZ'); return [e.x, e.y, e.z]; };
@@ -53,7 +56,7 @@ const SIDE = (() => {
     return [x, y, z, ...euler(new THREE.Matrix4().makeBasis(e, h, n))];
   };
   const set = (side) => ({
-    rest: [0.3, -0.34, -0.55, -0.35, 1.0, -0.3],
+    rest: AXE_REST,
     back: pose(side * 0.46, -0.2, -0.52, side * 0.7, -0.7, -side),
     hit: pose(-side * 0.14, -0.28, -0.72, -side * 0.3, -0.95, -side),
   });
@@ -62,7 +65,7 @@ const SIDE = (() => {
 
 /** Held in front of the camera, [x, y, z, rotX, rotY, rotZ] at rest, drawn back, and at the moment of the blow. */
 export const VM = {
-  axe: { rest: [0.3, -0.34, -0.55, -0.35, 1.0, -0.3], back: [0.32, -0.1, -0.42, 0.6, 1.0, -0.35], hit: [0.12, -0.36, -0.72, -1.4, 1.0, -0.1] },
+  axe: { rest: AXE_REST, back: [0.27, -0.2, -0.5, 0.7, 2.2, 0.06], hit: [0.1, -0.42, -0.74, -1.4, 2.2, 0.0] },
   axeR: SIDE.R,
   axeL: SIDE.L,
   fireworks: { rest: [0.3, -0.3, -0.5, -0.5, 0.6, -0.15], back: [0.3, -0.3, -0.5, -0.5, 0.6, -0.15], hit: [0.3, -0.3, -0.5, -0.5, 0.6, -0.15] },

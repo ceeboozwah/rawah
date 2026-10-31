@@ -4,6 +4,7 @@ import { HEIGHT_GLSL } from './cdlod.js';
 import { withAtmosphere, atmosphere, TRAMPLE, HOLD, SPRING } from './atmosphere.js';
 import { CULL } from './culling.js';
 import { BOXEL } from './terrain.js';
+import { MEADOW_GLSL } from './meadow.js';
 
 // Grass, as clumps rather than blades. A canvas atlas holds four painted
 // clumps (tall meadow grass with seed heads, mixed bunchgrass, alpine turf,
@@ -47,8 +48,8 @@ function paintGrass() {
   const gauss = () => (R() + R() + R() - 1.5) / 1.5;
   const kinds = [
     { n: 150, hMin: 0.5, hMax: 0.98, spread: 0.2, w: [3, 6], lean: 0.32, seeds: 0.28 },   // tall meadow grass
-    { n: 190, hMin: 0.35, hMax: 0.8, spread: 0.26, w: [3, 6.5], lean: 0.42, seeds: 0.12 }, // mixed bunchgrass
-    { n: 240, hMin: 0.14, hMax: 0.42, spread: 0.36, w: [2.5, 5], lean: 0.55, seeds: 0.04 }, // alpine turf and sedge
+    { n: 300, hMin: 0.3, hMax: 0.72, spread: 0.28, w: [1.8, 4.2], lean: 0.5, seeds: 0.1 }, // mixed bunchgrass
+    { n: 560, hMin: 0.16, hMax: 0.52, spread: 0.36, w: [1.2, 2.7], lean: 0.62, seeds: 0.03 }, // alpine turf and wiry sedge: many fine blades
     { n: 170, hMin: 0.4, hMax: 0.92, spread: 0.24, w: [4, 8], lean: 0.3, seeds: 0 },       // lush sedge by water
   ];
   kinds.forEach((k, ci) => {
@@ -260,7 +261,8 @@ export class Grass {
           uniform vec4 uClearA[6];
           uniform float uClearR[6];
           varying vec3 vSat, vTone;
-          varying float vLush;
+          varying float vLush, vTurf;
+          ${MEADOW_GLSL}
           ${veg ? 'uniform vec4 uPlants[64]; uniform vec4 uCats[4]; uniform vec2 uAtlas; uniform float uCure; varying float vT, vR, vK;' : ''}
           ${HEIGHT_GLSL}
           ${WIND_GLSL}`)
@@ -301,6 +303,11 @@ export class Grass {
           float trK = 0.45 + 0.55 * smoothstep(0.8, 2.0, trE);
           if (step(h1 * 0.8 + h3 * 0.2, grow * 2.0) < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }   // the height below can only lower this
           float y0 = groundH(root, 0.0);
+          // open montane and alpine meadow is short wiry turf in tufts with patches of bare sand between (meadow.js; the terrain paints the sand)
+          float openM = meadowOpen(cov);
+          float turf = openM * smoothstep(2500.0, 2900.0, y0);
+          grow *= 1.0 - meadowBare(root, y0) * openM;
+          vTurf = turf;
           grow *= smoothstep(3960.0, 3700.0, y0);
           float alpine = smoothstep(3330.0, 3560.0, y0);
           vSat = texture2D(uColorMap, root / uExtent + 0.5).rgb;
@@ -330,12 +337,13 @@ export class Grass {
           vMapUv = vec2((pl.x + uv.x) / uAtlas.x, 1.0 - (pl.y + 1.0 - uv.y) / uAtlas.y);
           vT = uv.y; vR = h1; vK = cat;
           float wk = min(cardH, 1.5) * ${L.wind}, nk = cardH * ${L.near};` : `
-          float size = mix(1.0, 0.6, alpine) * trK * (0.75 + h3 * 0.6) * fade * lodW * live * (1.0 - 0.5 * smoothstep(0.3, 1.1, buried));
+          float size = mix(1.0, 0.6, alpine) * mix(1.0, 0.85, turf) * trK * (0.75 + h3 * 0.6) * fade * lodW * live * (1.0 - 0.5 * smoothstep(0.3, 1.1, buried));
           if (size < 0.004) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
           // which clump: turf up high, sedge where it's green and wet, meadow grass elsewhere
           float kind = alpine > 0.5 ? 2.0 : vLush > 0.55 && h2 > 0.4 ? 3.0 : step(0.55, h3);
+          kind = turf > 0.5 && kind != 3.0 ? (h3 > 0.28 ? 2.0 : 1.0) : kind;
           vMapUv = vec2((kind + uv.x) / 4.0, uv.y);
-          float cardW = 1.6, cardH = mix(0.72, 0.42, alpine), wk = 1.0, nk = 1.0;`}
+          float cardW = mix(1.6, 0.85, turf), cardH = mix(mix(0.72, 0.42, alpine), kind > 2.5 ? 0.45 : 0.34, turf), wk = 1.0, nk = 1.0;`}
           float cv = float(gl_VertexID / 4) * 0.5 - 0.5;   // each card leans a little differently, never one flat sprite
           float ang = h2 * 6.2832 + cv * (h1 - 0.5) * 0.7, ca = cos(ang), sa = sin(ang);
           vec3 lp = vec3(position.x * ca - position.z * sa, position.y, position.x * sa + position.z * ca);
@@ -367,7 +375,7 @@ export class Grass {
         .replace('#include <common>', `#include <common>
           uniform float uFrost, uCure;
           varying vec3 vSat, vTone;
-          varying float vLush;
+          varying float vLush, vTurf;
           ${veg ? 'varying float vT, vR, vK;' : ''}`)
         .replace('#include <map_fragment>', veg ? `
           vec4 gs = texture2D(map, vMapUv);
@@ -395,9 +403,13 @@ export class Grass {
           diffuseColor.a *= gs.a;` : `
           vec4 gs = texture2D(map, vMapUv);
           // gs.r brightness, gs.g when this blade cures, gs.b root to tip
-          float alive = step(uCure - vLush * 0.35, gs.g);
+          // turf (open meadow) keeps a good share of its blades green, dull olive, the rest straw and a little russet, as on the real Rawah meadows
+          float alive = step(mix(uCure, uCure * 0.68, vTurf) - vLush * 0.35, gs.g);
           vec3 cured = mix(vec3(0.44, 0.34, 0.19), vSat * 1.1, 0.35) * vTone;
+          cured = mix(cured, vec3(0.285, 0.25, 0.135) * mix(vec3(1.0), vTone, 0.5), vTurf * 0.7);   // pale dry straw, as in the photograph
+          cured = mix(cured, vec3(0.235, 0.13, 0.075) * mix(vec3(1.0), vTone, 0.5), vTurf * 0.5 * step(0.74, fract(gs.g * 7.3 + gs.r * 3.1)));
           vec3 green = mix(vec3(0.17, 0.27, 0.08), vSat * vec3(0.75, 1.05, 0.6), 0.3);
+          green = mix(green, vec3(0.105, 0.125, 0.045), vTurf * 0.9);   // dull olive, not lime
           vec3 col = mix(cured, green, alive) * (0.45 + gs.r * 0.6);
           col *= mix(0.38, 1.05, smoothstep(0.0, 0.75, gs.b));   // shade at the root
           col = mix(col, vec3(0.82, 0.85, 0.9), uFrost * smoothstep(0.3, 1.0, gs.b) * 0.62);

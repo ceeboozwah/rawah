@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { withAtmosphere } from './atmosphere.js';
 import { SOIL, SOIL_PARS, SOIL_NORMAL, SOIL_COLOR } from './soil.js';
 import { MTN, MTN_PARS, MTN_NORMAL, MTN_COLOR } from './mountain.js';
+import { MEADOW_GLSL } from './meadow.js';
 import { chunkGeometry } from './culling.js';
 
 // Terrain helpers: textures, the albedo shader shared by near and far terrain,
@@ -217,7 +218,7 @@ export const BOXEL_COLOR = /* glsl */ `
         diffuseColor.rgb *= 1.0 - bx.r * 0.34;
         diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.15, 1.07, 0.9), bx.g * 0.6);`;
 
-export const ALBEDO_UNIFORMS = 'uniform sampler2D uColorMap;\nuniform sampler2D uCover;\nuniform float uHasCover;\nuniform sampler2D uNoise;\nuniform float uExtent;\nuniform sampler2D uRock;\nuniform sampler2D uBoxel;\n' + SOIL_PARS + MTN_PARS;
+export const ALBEDO_UNIFORMS = 'uniform sampler2D uColorMap;\nuniform sampler2D uCover;\nuniform float uHasCover;\nuniform sampler2D uNoise;\nuniform float uExtent;\nuniform sampler2D uRock;\nuniform sampler2D uBoxel;\n' + SOIL_PARS + MTN_PARS + MEADOW_GLSL;
 
 export function albedoUniforms(shader, colorMap, extent, noise, coverMap) {
   shader.uniforms.uColorMap = { value: colorMap };
