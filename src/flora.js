@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { hash2, clamp } from './noise.js';
 import { rng, buildSpecies, paintAtlas, foliageMaterial, foliageDepth, bakeImpostors, impostorGeometry, impostorMaterial, loadBark, TONE } from './trees.js';
-import { rockGeometries, rockMaterial } from './rocks.js';
+import { rockGeometries, rockMaterial, graniteMaterial } from './rocks.js';
 import { CULL, expandedFrustum, sphereInView } from './culling.js';
 
 // Trees, burned snags, downed logs, krummholz, willows and rock around the
@@ -23,15 +23,15 @@ const SPACING = 3.9;       // metres between placement candidates
 const FORM = 5;            // rock formation cells per tile side
 const REFILL_M = 14;       // move this far before refilling instances
 const TREES = ['spruce', 'fir', 'lodgepole', 'aspen', 'snag', 'krumm', 'willow'];
-const ROCKS = ['boulder', 'slab', 'tooth'];
+const ROCKS = ['boulder', 'slab', 'tooth', 'granite'];
 const KINDS = [...TREES, ...ROCKS, 'log'];
-const CAP = { spruce: 4000, fir: 4000, lodgepole: 3000, aspen: 2000, snag: 3000, krumm: 3000, willow: 1500, boulder: 5000, slab: 3000, tooth: 2000, log: 4000 };
+const CAP = { spruce: 4000, fir: 4000, lodgepole: 3000, aspen: 2000, snag: 3000, krumm: 3000, willow: 1500, boulder: 5000, slab: 3000, tooth: 2000, granite: 4000, log: 4000 };
 const SAPLING = 0.4;       // scale under this is an understory sapling: only drawn close up, never an impostor, no trunk to bump
 // per rock shape, in units of its scale: how far its base sits below the origin, how tall it stands, how wide its footprint
-const BOT = { boulder: 0.4, slab: 0.1, tooth: 1.5 };
-const TOP = { boulder: 0.65, slab: 0.3, tooth: 1.7 };
-const FOOT = { boulder: 0.85, slab: 1.2, tooth: 0.5 };
-const TILT = { boulder: 1, slab: 2.2, tooth: 0.5 };
+const BOT = { boulder: 0.4, slab: 0.1, tooth: 1.5, granite: 0 };
+const TOP = { boulder: 0.65, slab: 0.3, tooth: 1.7, granite: 0.7 };
+const FOOT = { boulder: 0.85, slab: 1.2, tooth: 0.5, granite: 0.8 };
+const TILT = { boulder: 1, slab: 2.2, tooth: 0.5, granite: 0.5 };
 const SEE = [[0.5, 70], [1, 150], [2, 280], [Infinity, 520]];   // [scale up to, metres you can see it from]
 const ROCK_R = 240;        // boulders and logs inside this radius
 // Culling. The buffers are refilled only when the view has turned ROT_REFILL or moved
@@ -44,7 +44,7 @@ const TALL = 30;           // tallest tree, for tile bounds
 const LOW_SUN = 0.55;      // below this (33 degrees up) shadows run long, and down a slope they run on without end: keep every caster
 const SHADOW_REACH = 170;  // longest shadow worth keeping a caster for (the shadow map reaches about this far)
 // height and crown radius of each kind at scale 1, for shadow-aware culling
-const DIM = { spruce: [18, 3.4], fir: [22, 3], lodgepole: [20, 3], aspen: [12, 3], snag: [19, 1.5], krumm: [3, 2], willow: [3, 2], boulder: [2.5, 2.5], slab: [2.5, 3], tooth: [4, 1.2], log: [1, 3.2] };
+const DIM = { spruce: [18, 3.4], fir: [22, 3], lodgepole: [20, 3], aspen: [12, 3], snag: [19, 1.5], krumm: [3, 2], willow: [3, 2], boulder: [2.5, 2.5], slab: [2.5, 3], tooth: [4, 1.2], granite: [1.4, 1.5], log: [1, 3.2] };
 
 export { TREES, ROCKS, SAPLING, BOT, FOOT, TOP };
 const fract = (v) => v - Math.floor(v);
@@ -109,7 +109,8 @@ export class Flora {
       this.group.add(m);
       return m;
     };
-    for (const kind of ROCKS) this.meshes[kind] = rocks[kind].map((geo) => make(kind, geo, stone));
+    const granite = rocks.textured ? graniteMaterial(this.world.extent) : stone;
+    for (const kind of ROCKS) this.meshes[kind] = rocks[kind].map((geo) => make(kind, geo, kind === 'granite' ? granite : stone));
     this.meshes.log = [make('log', log, wood)];
     this.impCap = cap;
     const ig = impostorGeometry(cap);
@@ -259,6 +260,11 @@ export class Flora {
       const brook = w.nearestStream(x, z);
       return !(brook.stream && brook.d < brook.stream.width / 2 + 1.5);
     };
+    // is there lake within `pad` metres (water cells only: nearWater also wants the lidar below the surface, which most banks are not)
+    const lakeNear = (x, z, pad) => {
+      for (const k of [0.4, 0.75, 1]) for (let i = 0; i < 8; i++) if (w.lakeAt(x + Math.cos(i * 0.7854) * pad * k, z + Math.sin(i * 0.7854) * pad * k)) return true;
+      return false;
+    };
     const inside = (x, z) => x >= x0 && x < x0 + size && z >= z0 && z < z0 + size;
     const crowded = (x, z, pad) => {
       for (let k = 0; k < blocks.length; k += 3) {
@@ -275,6 +281,8 @@ export class Flora {
      * tile is kept, so neighbouring tiles can build the same formation.
      */
     const addRock = (kind, x, z, s, r, base = null) => {
+      // anything boulder-sized is mostly the boulder pack's stone (rocks.js); the built icosphere rocks stay for the small stuff
+      if (kind === 'boulder' && s >= 0.75 && fract(r * 37.3) < 0.8) kind = 'granite';
       const e = w.height(x, z);
       let y;
       if (base === null) {
@@ -282,7 +290,7 @@ export class Flora {
         y = e + (BOT[kind] - 0.1 - Math.min(1.1, Math.hypot(g.x, g.z)) * 0.4) * s;
       } else y = base + (BOT[kind] - 0.1) * s;
       if (s >= 0.9) blocks.push(x, z, FOOT[kind] * s);
-      if (inside(x, z) && (base !== null || free(x, z, e, 1.2)) && !this.#gone(kind, x, z)) {
+      if (inside(x, z) && (base !== null || free(x, z, e, 1.2 + (kind === 'granite' ? FOOT.granite * s : 0))) && !this.#gone(kind, x, z)) {   // a big boulder keeps its whole width off the trail
         items[kind].push(x, y, z, s, r);
         if (y < minY) minY = y;
         if (y + TOP[kind] * s > maxY) maxY = y + TOP[kind] * s;
@@ -307,7 +315,28 @@ export class Flora {
         const h0 = hash2(fi, fj, 41), h1 = hash2(fi, fj, 42), h2 = hash2(fi, fj, 43), h3 = hash2(fi, fj, 44);
         const x = x0 + (a + 0.15 + h0 * 0.7) * cs, z = z0 + (b + 0.15 + h1 * 0.7) * cs;
         const e = w.height(x, z), cv = w.cover(x, z, e);
-        const p = Math.max(cv.rock * 0.55 + cv.alpine * 0.1, 0.045 + cv.forest * 0.03);
+        // water-worn and glacial boulders go where the Pinedale ice and the streams left them (USGS SIM 3010: till, moraines, block slopes):
+        // strewn along cirque-lake shores and beside creeks, whatever the land cover says
+        const h4 = hash2(fi, fj, 45);
+        if (h4 < 0.8) {
+          const RW = rng(Math.floor(hash2(fi, fj, 48) * 4294967295));
+          if (h4 < 0.55 && lakeNear(x, z, 26)) {
+            for (let c = 4 + Math.floor(RW() * 6); c > 0; c--) {
+              const a = RW() * Math.PI * 2, d = RW() * 30, px = x + Math.cos(a) * d, pz = z + Math.sin(a) * d, s = 0.45 + RW() * RW() * 1.7, rr = RW();
+              if (!w.lakeAt(px, pz) && lakeNear(px, pz, 9)) addRock(s > 0.6 ? 'granite' : 'boulder', px, pz, s, rr);
+            }
+          } else if (h4 >= 0.55) {
+            const near = w.nearestStream(x, z);
+            if (near.stream && near.d < 22) {
+              for (let c = 2 + Math.floor(RW() * 4); c > 0; c--) {
+                const a = RW() * Math.PI * 2, d = RW() * 14, px = x + Math.cos(a) * d, pz = z + Math.sin(a) * d, s = 0.5 + RW() * RW() * 0.9, rr = RW();
+                const b = w.nearestStream(px, pz);
+                if (b.stream && b.d > b.stream.width / 2 + 1.8 && b.d < b.stream.width / 2 + 8) addRock('granite', px, pz, s, rr);
+              }
+            }
+          }
+        }
+        const p = Math.max(cv.rock * 0.55 + cv.alpine * 0.1, 0.045 + cv.forest * 0.03 + cv.snag * 0.04);
         if (h2 > p) continue;
         const rock = cv.rock, alpine = cv.alpine, grade = cv.grade, k = 1 + rock * 0.6;
         const g = w.gradient(x, z, _g), gl = Math.hypot(g.x, g.z) || 1;

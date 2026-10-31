@@ -29,6 +29,12 @@ export const CHANNEL_GLSL = /* glsl */ `
 uniform highp sampler2D uChTex;
 uniform vec2 uChOrg;
 uniform float uChOn;
+uniform sampler2D uTrTex;   // metres from the edge of the nearest trail, 0..3 in 8 bits (255 = clear of any)
+float trailEdge(vec2 xz) {
+  vec2 u = (xz - uChOrg) / 512.0;
+  if (uChOn < 0.5 || u.x < 0.0 || u.y < 0.0 || u.x > 1.0 || u.y > 1.0) return 3.0;
+  return texture2D(uTrTex, u).r * 3.0;
+}
 float chCell(ivec2 c) {
   if (c.x < 0 || c.y < 0 || c.x >= 1024 || c.y >= 1024) return 1e4;
   return texelFetch(uChTex, c, 0).r;
@@ -63,7 +69,13 @@ export class Channels {
     this.tex.magFilter = this.tex.minFilter = THREE.NearestFilter;
     this.tex.generateMipmaps = false;
     this.tex.needsUpdate = true;
-    this.uniforms = { uChTex: { value: this.tex }, uChOrg: { value: new THREE.Vector2() }, uChOn: { value: 0 } };
+    // how far each texel is from the edge of the nearest trail or road (kept for the grass, which must never grow on a tread)
+    this.tr = new Uint8Array(CH_N * CH_N).fill(255);
+    this.trTex = new THREE.DataTexture(this.tr, CH_N, CH_N, THREE.RedFormat, THREE.UnsignedByteType);
+    this.trTex.magFilter = this.trTex.minFilter = THREE.LinearFilter;
+    this.trTex.generateMipmaps = false;
+    this.trTex.needsUpdate = true;
+    this.uniforms = { uChTex: { value: this.tex }, uTrTex: { value: this.trTex }, uChOrg: { value: new THREE.Vector2() }, uChOn: { value: 0 } };
     this.segs = [];
     this.#prepare();
   }
@@ -128,8 +140,13 @@ export class Channels {
     const w = this.world;
     let id = 1000;
     for (const t of w.trails) {
-      if (t.kind === 'road' || !t.dense || t.dense.length < 2) continue;
+      if (!t.dense || t.dense.length < 2) continue;
       const p = t.dense, n = p.length, half = t.width / 2, tw = half * 0.8;
+      if (t.kind === 'road') {   // roads are not dug, but nothing grows on them either
+        id++;
+        for (let i = 0; i < n - 1; i++) this.segs.push({ ax: p[i][0], az: p[i][1], ay: 0, bx: p[i + 1][0], bz: p[i + 1][1], by: 0, wb: tw, id, along: 0, tr: half, flat: true });
+        continue;
+      }
       const g = new Float32Array(n);
       for (let i = 0; i < n; i++) g[i] = w.height(p[i][0], p[i][1]);
       const c = new Float32Array(n);
@@ -157,12 +174,14 @@ export class Channels {
     this.uniforms.uChOrg.value.set(this.org.x, this.org.z);
     this.uniforms.uChOn.value = 1;
     this.tex.needsUpdate = true;
+    this.trTex.needsUpdate = true;
     return true;
   }
 
   #rasterize() {
     const d = this.data, ox = this.org.x, oz = this.org.z, size = CH_N * CH_C;
     d.fill(NONE);
+    this.tr.fill(255);
     const seen = new Set();
     const gx0 = Math.floor(ox / this.cellSize), gx1 = Math.floor((ox + size) / this.cellSize);
     const gz0 = Math.floor(oz / this.cellSize), gz1 = Math.floor((oz + size) / this.cellSize);
@@ -178,7 +197,7 @@ export class Channels {
   #stamp(s, i) {
     const d = this.data, ox = this.org.x, oz = this.org.z;
     const dx = s.bx - s.ax, dz = s.bz - s.az, L2 = dx * dx + dz * dz || 1e-6, L = Math.sqrt(L2);
-    const wb = s.wb, reach = s.tr ? s.wb + TREAD_REACH : REACH;
+    const wb = s.wb, reach = s.tr ? s.tr * 1.2 + 3 : REACH;
     const x0 = Math.max(0, Math.floor((Math.min(s.ax, s.bx) - reach - ox) / CH_C)), x1 = Math.min(CH_N - 1, Math.ceil((Math.max(s.ax, s.bx) + reach - ox) / CH_C));
     const z0 = Math.max(0, Math.floor((Math.min(s.az, s.bz) - reach - oz) / CH_C)), z1 = Math.min(CH_N - 1, Math.ceil((Math.max(s.az, s.bz) + reach - oz) / CH_C));
     for (let r = z0; r <= z1; r++) {
@@ -191,6 +210,9 @@ export class Channels {
         if (dist > reach) continue;
         const wy = s.ay + (s.by - s.ay) * t;
         if (s.tr) {
+          const k3 = r * CH_N + c, q = Math.min(255, Math.max(0, Math.round((dist - s.tr * 1.2) / 3 * 255)));   // the ribbon's ragged edge reaches about 1.2 half widths
+          if (q < this.tr[k3]) this.tr[k3] = q;
+          if (s.flat) continue;
           const tv = wb * (1 + 0.12 * Math.sin((i * 0.9 + t) * 1.3 + s.id));
           const ptr = dist < tv ? wy - TREAD_DROP - TREAD_SCOOP * (1 - (dist / tv) * (dist / tv)) : wy + 0.7 * (dist - tv) + 0.35 * (dist - tv) * (dist - tv);
           const k2 = r * CH_N + c;

@@ -295,6 +295,10 @@ export class Grass {
           float mask = maskAt(root);
           float grow = ${L.grow};
           grow *= 1.0 - smoothstep(0.025, 0.06, -chanCut(root));   // nothing grows in a worn tread (channels.js digs it)
+          // metres from the edge of the nearest trail or road: nothing roots on or beside the tread, and tufts shrink toward it so no blade lies across it
+          float trE = trailEdge(root);
+          grow *= smoothstep(0.5, 0.8, trE);
+          float trK = 0.45 + 0.55 * smoothstep(0.8, 2.0, trE);
           if (step(h1 * 0.8 + h3 * 0.2, grow * 2.0) < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }   // the height below can only lower this
           float y0 = groundH(root, 0.0);
           grow *= smoothstep(3960.0, 3700.0, y0);
@@ -317,7 +321,7 @@ export class Grass {
           ${L.place}
           float h4 = ihash(cell * 5 + ivec2(3, 11));
           if (h4 > dens) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-          float size = sz * fade * lodW * live * (1.0 - 0.5 * smoothstep(0.3, 1.1, buried));
+          float size = sz * trK * fade * lodW * live * (1.0 - 0.5 * smoothstep(0.3, 1.1, buried));
           if (size < 0.004) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
           vec4 cc = uCats[int(cat)];
           int pi = int(cc.x) + min(int(floor(pr * cc.y)), max(int(cc.y) - 1, 0));
@@ -326,7 +330,7 @@ export class Grass {
           vMapUv = vec2((pl.x + uv.x) / uAtlas.x, 1.0 - (pl.y + 1.0 - uv.y) / uAtlas.y);
           vT = uv.y; vR = h1; vK = cat;
           float wk = min(cardH, 1.5) * ${L.wind}, nk = cardH * ${L.near};` : `
-          float size = mix(1.0, 0.6, alpine) * (0.75 + h3 * 0.6) * fade * lodW * live * (1.0 - 0.5 * smoothstep(0.3, 1.1, buried));
+          float size = mix(1.0, 0.6, alpine) * trK * (0.75 + h3 * 0.6) * fade * lodW * live * (1.0 - 0.5 * smoothstep(0.3, 1.1, buried));
           if (size < 0.004) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
           // which clump: turf up high, sedge where it's green and wet, meadow grass elsewhere
           float kind = alpine > 0.5 ? 2.0 : vLush > 0.55 && h2 > 0.4 ? 3.0 : step(0.55, h3);

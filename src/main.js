@@ -49,6 +49,7 @@ import { PerfHud } from './perfhud.js';
 import { Net, normCode } from './net.js';
 import { renderIcons } from './icons.js';
 import { buildTool, loadAxe } from './tools.js';
+import { loadBoulders } from './rocks.js';
 import { kindOf } from './water.js';
 import { PRESETS, resolveQuality, isTouch, SCALE } from './quality.js';
 import { setRangeK } from './cdlod.js';
@@ -234,6 +235,7 @@ const streams = buildStreams(world);
 scene.add(streams.group);
 await loadFoliage();     // the cut-out needles, aspen leaves and cones
 await loadAxe();         // the axe model (assets/tools/axe.fbx)
+await loadBoulders();    // the boulder pack (assets/rocks/)
 const flora = new Flora(world, scene, renderer, Q.flora, calendar.leaves);
 const weather = new Weather();
 weather.override = REGIMES[settings.weather] ? settings.weather : null;

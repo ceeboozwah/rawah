@@ -57,10 +57,47 @@ function stone(seed, { sx = 1, sy = 0.75, sz = 1, planes = 9, cut = 0.72, flat =
   return flatGeo;
 }
 
+// The user's Rock Boulder 10 pack (assets/rocks/): twelve scanned-and-baked boulders, 16-160 triangles each, that share one 2048 px
+// albedo and one tangent normal atlas. The 3ds Max file is read by tools/extract_boulders.py (no other mesh came with it) into
+// boulders.bin (per rock: unindexed positions, smooth normals, uvs; y up, base at y = 0, metres) and boulders.json.
+const BOULDER_K = 0.6;      // the biggest native rock is 3.3 m; 0.6 puts it at 2 units across, the size of the old icosphere boulder at scale 1
+let BOULDERS = null;
+
+export async function loadBoulders() {
+  try {
+    const [meta, buf] = await Promise.all([
+      fetch('assets/rocks/boulders.json').then((r) => r.json()),
+      fetch('assets/rocks/boulders.bin').then((r) => r.arrayBuffer()),
+    ]);
+    const f = new Float32Array(buf);
+    const loader = new THREE.TextureLoader();
+    const [albedo, normal] = await Promise.all([loader.loadAsync('assets/rocks/boulder_albedo.jpg'), loader.loadAsync('assets/rocks/boulder_normal.webp')]);
+    albedo.colorSpace = THREE.SRGBColorSpace;
+    for (const t of [albedo, normal]) { t.anisotropy = 8; t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; }
+    const geos = meta.slice(0, 12).map((m) => {   // the 13th is a stray 8-triangle fragment
+      const g = new THREE.BufferGeometry(), n = m.n, o = m.o;
+      const pos = f.slice(o, o + n * 3);
+      for (let i = 0; i < pos.length; i++) pos[i] *= BOULDER_K;
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      g.setAttribute('normal', new THREE.BufferAttribute(f.slice(o + n * 3, o + n * 6), 3));
+      g.setAttribute('uv', new THREE.BufferAttribute(f.slice(o + n * 6, o + n * 8), 2));
+      g.computeBoundingBox();
+      g.computeBoundingSphere();
+      return g;
+    });
+    BOULDERS = { geos, albedo, normal };
+  } catch (err) {
+    console.warn('boulder pack failed to load, using the built rocks', err);
+  }
+}
+
 /** Unit-ish geometry for every rock kind; scale in flora to the size wanted. */
 export function rockGeometries() {
+  const boulder = [stone(1, { sy: 0.8 }), stone(2, { sx: 1.15, sy: 0.7, sz: 0.9, planes: 11 }), stone(3, { sy: 0.9, planes: 8, cut: 0.66 }), stone(4, { sx: 0.9, sy: 0.65, sz: 1.2, planes: 10 })];
   return {
-    boulder: [stone(1, { sy: 0.8 }), stone(2, { sx: 1.15, sy: 0.7, sz: 0.9, planes: 11 }), stone(3, { sy: 0.9, planes: 8, cut: 0.66 }), stone(4, { sx: 0.9, sy: 0.65, sz: 1.2, planes: 10 })],
+    granite: BOULDERS ? BOULDERS.geos : boulder,
+    textured: !!BOULDERS,
+    boulder,
     slab: [stone(5, { sx: 1.5, sy: 0.3, sz: 1.1, planes: 6, cut: 0.9, flat: -0.28, tilt: 0.3 }), stone(6, { sx: 1.2, sy: 0.4, sz: 1.5, planes: 7, cut: 0.86, flat: -0.38, tilt: 0.4 })],
     tooth: [stone(7, { sx: 0.5, sy: 2.1, sz: 0.55, planes: 8, cut: 0.7, flat: -0.8 }), stone(8, { sx: 0.65, sy: 1.6, sz: 0.5, planes: 9, cut: 0.66, flat: -0.8 })],
   };
@@ -83,5 +120,24 @@ export function rockMaterial(extent = 1) {
     shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D uRock;\nuniform sampler2D uBoxel;\nuniform float uRExtent;');
   };
   mat.customProgramCacheKey = () => 'rawah-rock';
+  return mat;
+}
+
+/** The boulder pack's stone: its own albedo and normal atlas, through the shared light, weather and the boxel field's damp. */
+export function graniteMaterial(extent = 1) {
+  const mat = new THREE.MeshLambertMaterial({ map: BOULDERS.albedo, normalMap: BOULDERS.normal });
+  mat.onBeforeCompile = (shader) => {
+    withAtmosphere(shader, { weather: 1, occlusion: 0.8 });
+    shader.uniforms.uBoxel = BOXEL;
+    shader.uniforms.uRExtent = { value: extent };
+    shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+      {
+        vec3 rwp = (uViewInv * vec4(vFogView, 1.0)).xyz;
+        // the pack's stone is a dark brown-grey; the Rawah batholith is a pale pinkish grey, (its albedo averages about a fifth of the old rocks' brightness) so lift it hard and take some of the brown out
+        diffuseColor.rgb = mix(vec3(dot(diffuseColor.rgb, vec3(0.3, 0.55, 0.15))), diffuseColor.rgb, 0.7) * vec3(3.6, 3.3, 3.15);
+        diffuseColor.rgb *= 1.0 - texture2D(uBoxel, rwp.xz / uRExtent + 0.5).r * 0.32;
+      }`).replace('#include <common>', '#include <common>\nuniform sampler2D uBoxel;\nuniform float uRExtent;');
+  };
+  mat.customProgramCacheKey = () => 'rawah-granite';
   return mat;
 }

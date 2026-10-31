@@ -217,7 +217,7 @@ function draped(params, terrain) {
         ${WORLEY_GLSL}
         // the tread's own fine relief, in metres: soil grain, clods and small stones (shading only: it tilts the normal)
         float treadBump(vec2 p) {
-          return vnoise(p * 38.0) * 0.006 + vnoise(p * 17.0) * 0.008 + vnoise(p * 6.0) * 0.012;
+          return vnoise(p * 130.0) * 0.004 + vnoise(p * 55.0) * 0.004 + vnoise(p * 14.0) * 0.004;
         }`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         {
@@ -245,20 +245,20 @@ function draped(params, terrain) {
           float mid = 1.0 - smoothstep(0.0, 0.85, e);
           // worn tread: packed, paler soil down the middle of a trail (two ruts on a road), darker duff and moss at the edges
           float worn = road > 0.5 ? smoothstep(0.16, 0.0, abs(e - 0.5)) : mid;
-          float grain = vnoise(p * 45.0), clod = vnoise(p * 5.0);
-          diffuseColor.rgb *= (mix(0.72, 1.0 + 0.2 * worn, road > 0.5 ? 1.0 : mid) * (0.82 + streak * 0.3) + (n - 0.5) * 0.2) * (0.8 + grain * 0.4) * (0.78 + clod * 0.44);
-          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.78, 0.9, 0.68), smoothstep(0.5, 0.95, e) * 0.7);
+          float grain = vnoise(p * 150.0) * 0.6 + vnoise(p * 70.0) * 0.4, clod = vnoise(p * 9.0);
+          diffuseColor.rgb *= (mix(road > 0.5 ? 0.72 : 0.86, 1.0 + 0.12 * worn, road > 0.5 ? 1.0 : mid) * (0.9 + streak * 0.16) + (n - 0.5) * 0.2) * (0.74 + grain * 0.52) * (0.88 + clod * 0.24);
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.9, 0.95, 0.8), smoothstep(0.6, 0.95, e) * 0.45);
           float nearK = 1.0 - smoothstep(10.0, 45.0, camD);
           if (nearK > 0.0) {
             // grit and scattered gravel, sizes all over the place, low contrast like real tread
-            vec4 w = worley(p / 0.07);
-            vec4 v = worley(p / 0.19 + 3.3);
+            vec4 w = worley(p / 0.025);
+            vec4 v = worley(p / 0.07 + 3.3);
             float grit = smoothstep(0.45 * w.y + 0.1, 0.05, w.x) * step(w.y, 0.6);
             float peb = smoothstep(0.32 * v.y + 0.08, 0.04, v.x) * step(v.y, mix(0.22, 0.4, road));
-            diffuseColor.rgb *= 1.0 + (grit * (w.y - 0.4) * 0.6 + peb * (v.y - 0.15) * 1.0) * nearK;
+            diffuseColor.rgb *= 1.0 + (grit * (w.y - 0.4) * 1.0 + peb * (v.y - 0.15) * 1.4) * nearK;
             // fallen needles and flecks of bark lying across the tread, darker in the dip's edges
             float fleck = smoothstep(0.86, 0.95, vnoise(vec2(uA * 52.0, vL * 38.0))) * smoothstep(0.1, 0.8, e);
-            diffuseColor.rgb *= 1.0 - fleck * 0.3 * nearK;
+            diffuseColor.rgb *= 1.0 - fleck * 0.12 * nearK;
           }
         }`);
   };
@@ -274,7 +274,7 @@ export function buildTrails(world, terrain) {
   const group = new THREE.Group();
   const mat = draped({ vertexColors: true }, terrain);
   const geos = [];
-  const tones = { road: ROAD, track: [0.23, 0.185, 0.13], trail: [0.22, 0.165, 0.11] };
+  const tones = { road: ROAD, track: [0.40, 0.30, 0.20], trail: [0.45, 0.31, 0.185] }   // trail: pale sandy decomposed-granite tan, like a real alpine path;
   for (const t of world.trails) {
     if (!t.width) continue;
     // about a metre between rows: the dense line (2.5 m, 4 m on roads) halved
