@@ -294,6 +294,7 @@ export class Grass {
           vec4 cov = texture2D(uCover, root / uExtent + 0.5);   // live, burned, aspen, rock
           float mask = maskAt(root);
           float grow = ${L.grow};
+          grow *= 1.0 - smoothstep(0.025, 0.06, -chanCut(root));   // nothing grows in a worn tread (channels.js digs it)
           if (step(h1 * 0.8 + h3 * 0.2, grow * 2.0) < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }   // the height below can only lower this
           float y0 = groundH(root, 0.0);
           grow *= smoothstep(3960.0, 3700.0, y0);

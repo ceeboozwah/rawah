@@ -21,7 +21,9 @@ const REACH = 11;                                // metres from the centreline t
 const SMIN = 0.3;                                // softness of the lip where the bank meets the ground
 const DEPTH = 0.38;                              // bed below the water surface at the edge of the bed
 const SCOOP = 0.12;                              // extra depth at the very middle
-const SLOPE = 0.85, FLARE = 0.1;                 // bank slope and how it steepens with distance
+const SLOPE = 0.85, FLARE = 0.1;
+const TREAD_REACH = 2.4;                         // trails: metres past the tread's edge that the bank is written
+const TREAD_SCOOP = 0.012, TREAD_DROP = 0.015;                       // the middle of a tread is a touch lower than its sides (the soft lip adds the rest)                 // bank slope and how it steepens with distance
 
 export const CHANNEL_GLSL = /* glsl */ `
 uniform highp sampler2D uChTex;
@@ -103,6 +105,7 @@ export class Channels {
         this.segs.push({ ax: p[i][0], az: p[i][1], ay: p[i][2], bx: p[i + 1][0], bz: p[i + 1][1], by: p[i + 1][2], wb, id: st.id, along: 0 });
       }
     }
+    this.#prepareTrails();
     // the world's nearest-stream lookup carries the levels too
     let k = 0;
     for (const st of w.streams) for (let i = 0; i < st.pts.length - 1; i++) {
@@ -117,6 +120,29 @@ export class Channels {
       const z0 = Math.floor((Math.min(s.az, s.bz) - REACH) / this.cellSize), z1 = Math.floor((Math.max(s.az, s.bz) + REACH) / this.cellSize);
       for (let gx = x0; gx <= x1; gx++) for (let gz = z0; gz <= z1; gz++) { const key = gx * 100003 + gz; let a = this.grid.get(key); if (!a) this.grid.set(key, a = []); a.push(i); }
     });
+  }
+
+  /** Trails and tracks are worn into the ground: a tread that runs level (the ground along it averaged over about 10 m, so it
+   *  does not follow every bump) with a bank either side, a few centimetres under the lidar. Roads are left as they are. */
+  #prepareTrails() {
+    const w = this.world;
+    let id = 1000;
+    for (const t of w.trails) {
+      if (t.kind === 'road' || !t.dense || t.dense.length < 2) continue;
+      const p = t.dense, n = p.length, half = t.width / 2, tw = half * 0.8;
+      const g = new Float32Array(n);
+      for (let i = 0; i < n; i++) g[i] = w.height(p[i][0], p[i][1]);
+      const c = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        let sum = 0, cnt = 0;
+        for (let k = Math.max(0, i - 4); k <= Math.min(n - 1, i + 4); k++) { sum += g[k]; cnt++; }
+        c[i] = sum / cnt;
+      }
+      id++;
+      for (let i = 0; i < n - 1; i++) {
+        this.segs.push({ ax: p[i][0], az: p[i][1], ay: c[i], bx: p[i + 1][0], bz: p[i + 1][1], by: c[i + 1], wb: tw, id, along: 0, tr: half });
+      }
+    }
   }
 
   /** Rebuild the window when the camera has moved far from its centre. */
@@ -152,9 +178,9 @@ export class Channels {
   #stamp(s, i) {
     const d = this.data, ox = this.org.x, oz = this.org.z;
     const dx = s.bx - s.ax, dz = s.bz - s.az, L2 = dx * dx + dz * dz || 1e-6, L = Math.sqrt(L2);
-    const wb = s.wb;
-    const x0 = Math.max(0, Math.floor((Math.min(s.ax, s.bx) - REACH - ox) / CH_C)), x1 = Math.min(CH_N - 1, Math.ceil((Math.max(s.ax, s.bx) + REACH - ox) / CH_C));
-    const z0 = Math.max(0, Math.floor((Math.min(s.az, s.bz) - REACH - oz) / CH_C)), z1 = Math.min(CH_N - 1, Math.ceil((Math.max(s.az, s.bz) + REACH - oz) / CH_C));
+    const wb = s.wb, reach = s.tr ? s.wb + TREAD_REACH : REACH;
+    const x0 = Math.max(0, Math.floor((Math.min(s.ax, s.bx) - reach - ox) / CH_C)), x1 = Math.min(CH_N - 1, Math.ceil((Math.max(s.ax, s.bx) + reach - ox) / CH_C));
+    const z0 = Math.max(0, Math.floor((Math.min(s.az, s.bz) - reach - oz) / CH_C)), z1 = Math.min(CH_N - 1, Math.ceil((Math.max(s.az, s.bz) + reach - oz) / CH_C));
     for (let r = z0; r <= z1; r++) {
       const pz = oz + (r + 0.5) * CH_C;
       for (let c = x0; c <= x1; c++) {
@@ -162,8 +188,15 @@ export class Channels {
         const t = Math.min(1, Math.max(0, ((px - s.ax) * dx + (pz - s.az) * dz) / L2));
         const ex = px - (s.ax + dx * t), ez = pz - (s.az + dz * t);
         const dist = Math.hypot(ex, ez);
-        if (dist > REACH) continue;
+        if (dist > reach) continue;
         const wy = s.ay + (s.by - s.ay) * t;
+        if (s.tr) {
+          const tv = wb * (1 + 0.12 * Math.sin((i * 0.9 + t) * 1.3 + s.id));
+          const ptr = dist < tv ? wy - TREAD_DROP - TREAD_SCOOP * (1 - (dist / tv) * (dist / tv)) : wy + 0.7 * (dist - tv) + 0.35 * (dist - tv) * (dist - tv);
+          const k2 = r * CH_N + c;
+          if (ptr < d[k2]) d[k2] = ptr;
+          continue;
+        }
         // the bed and the banks wander a little along the stream so no two reaches are the same ditch
         const along = i * 0.37 + t;
         const wv = wb * (1 + 0.22 * Math.sin(along * 2.1 + s.id) + 0.12 * Math.sin(along * 5.3));

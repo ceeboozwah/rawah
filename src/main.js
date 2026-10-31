@@ -48,7 +48,7 @@ import { Poser } from './poser.js';
 import { PerfHud } from './perfhud.js';
 import { Net, normCode } from './net.js';
 import { renderIcons } from './icons.js';
-import { buildTool } from './tools.js';
+import { buildTool, loadAxe } from './tools.js';
 import { kindOf } from './water.js';
 import { PRESETS, resolveQuality, isTouch, SCALE } from './quality.js';
 import { setRangeK } from './cdlod.js';
@@ -221,7 +221,7 @@ const onStream = (x, z) => { const st = world.nearestStream(x, z); return !!st.s
 const openLake = (x, z) => { const lk = world.lakeAt(x, z); return !!lk && lk.level < world.iceLine; };
 let rainAcc = 0, atvWake = null, atvSilt = 0;
 scene.add(lakes.group);
-const trails = buildTrails(world);
+const trails = buildTrails(world, terrain);
 scene.add(trails);
 // the two cars (parked nose to tail at every trailhead) and the landmarks: outhouse and signs
 const modelFiles = {
@@ -233,6 +233,7 @@ scene.add(buildSigns(world, models));
 const streams = buildStreams(world);
 scene.add(streams.group);
 await loadFoliage();     // the cut-out needles, aspen leaves and cones
+await loadAxe();         // the axe model (assets/tools/axe.fbx)
 const flora = new Flora(world, scene, renderer, Q.flora, calendar.leaves);
 const weather = new Weather();
 weather.override = REGIMES[settings.weather] ? settings.weather : null;

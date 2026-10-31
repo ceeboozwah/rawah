@@ -7,6 +7,7 @@ import { withAtmosphere } from './atmosphere.js';
 import { NOISE_GLSL } from './detail.js';
 import { WORLEY_GLSL } from './terrain.js';
 import { ChunkSet } from './culling.js';
+import { HEIGHT_GLSL } from './cdlod.js';
 
 // Lakes, trail ribbons, cairns, trail signs and the car at the trailhead.
 
@@ -153,32 +154,82 @@ export function buildLakes(world, mirrorU = null) {
 }
 
 // ------------------------------------------------------------------ trails
-/** Trail tread: nudged toward the camera with distance so ribbons stay on top
- *  of coarse far-LOD terrain without z-fighting, with ragged edges where the
- *  meadow creeps in, a worn line down the middle (wheel ruts on roads), and
- *  gravel and pebbles up close. `aSide` runs 0..1 across the ribbon. */
-function draped(params) {
+/** Trail tread. The ribbon is laid on the ground by its own vertex shader, from the same function the terrain draws
+ *  (`groundH`: lidar, micro-relief, sculpting and the worn-in tread of channels.js), at about a metre along and five
+ *  points across, so it follows the dip and the banks and never hovers; its normals come from that surface too. The
+ *  fragment adds ragged edges where the meadow creeps in, a worn line, scuffs along the way, lighter packed soil down
+ *  the middle and darker duff at the edges, and gravel up close. `aSide` runs 0..1 across the ribbon, `aLat` is the
+ *  way across it on the ground. */
+function draped(params, terrain) {
   const mat = new THREE.MeshLambertMaterial(params);
   mat.polygonOffset = true;
   mat.polygonOffsetFactor = -2;
   mat.polygonOffsetUnits = -4;
   mat.onBeforeCompile = (shader) => {
+    if (terrain) {
+      Object.assign(shader.uniforms, terrain.uniforms);
+      shader.uniforms.uCover = { value: terrain.coverMap };
+      shader.uniforms.uExtent = { value: terrain.extent };
+    }
     withAtmosphere(shader, { weather: 0.7 });
+    // without a terrain (the graded pad at a trailhead) the heights and normals are baked into the mesh
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute vec2 aSide;\nvarying vec2 vSide;\nvarying vec3 vTW;')
+      .replace('#include <common>', `#include <common>
+      attribute vec2 aSide;
+      varying vec2 vSide;
+      varying vec2 vLat;
+      varying vec3 vTW;
+      ${terrain ? `attribute vec2 aLat;
+      uniform sampler2D uCover;
+      uniform float uExtent;
+      ${HEIGHT_GLSL}` : ''}`)
+      .replace('#include <beginnormal_vertex>', terrain ? `
+      vec3 objectNormal;
+      {
+        const float e = 0.3;
+        float hx0 = groundH(position.xz - vec2(e, 0.0), 1.0), hx1 = groundH(position.xz + vec2(e, 0.0), 1.0);
+        float hz0 = groundH(position.xz - vec2(0.0, e), 1.0), hz1 = groundH(position.xz + vec2(0.0, e), 1.0);
+        objectNormal = normalize(vec3(hx0 - hx1, 2.0 * e, hz0 - hz1));
+      }` : '#include <beginnormal_vertex>')
+      .replace('#include <begin_vertex>', terrain ? `
+      vec3 transformed = vec3(position.x, groundH(position.xz, 1.0) + 0.02, position.z);` : '#include <begin_vertex>')
+      // the tread lies in a dip below the coarser terrain triangles, which would shade it in stripes: look the shadow up 12 cm higher
+      .replace('#include <shadowmap_vertex>', terrain ? `{
+        vec4 wp0 = worldPosition;
+        worldPosition.y += 0.12;
+        #include <shadowmap_vertex>
+        worldPosition = wp0;
+      }` : '#include <shadowmap_vertex>')
       .replace('#include <project_vertex>', `
       vSide = aSide;
+      vLat = ${terrain ? 'aLat' : 'vec2(1.0, 0.0)'};
       vTW = transformed;
       vec4 mvPosition = modelViewMatrix * vec4(transformed, 1.0);
       float dCam = length(mvPosition.xyz);
-      mvPosition.xyz -= normalize(mvPosition.xyz) * (0.04 + dCam * 0.0045);
+      mvPosition.xyz -= normalize(mvPosition.xyz) * (0.11 + dCam * 0.004);   // depth only (along the view ray): lets the tread show inside its dip, under the coarser terrain triangles
       gl_Position = projectionMatrix * mvPosition;`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec2 vSide;
+        varying vec2 vLat;
         varying vec3 vTW;
         ${NOISE_GLSL}
-        ${WORLEY_GLSL}`)
+        ${WORLEY_GLSL}
+        // the tread's own fine relief, in metres: soil grain, clods and small stones (shading only: it tilts the normal)
+        float treadBump(vec2 p) {
+          return vnoise(p * 38.0) * 0.006 + vnoise(p * 17.0) * 0.008 + vnoise(p * 6.0) * 0.012;
+        }`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        {
+          // bump from the screen-space slope of treadBump (the usual derivative trick), fading out with distance
+          float nk = 1.0 - smoothstep(6.0, 30.0, distance(vTW, cameraPosition));
+          vec3 sp = -vViewPosition, sdx = dFdx(sp), sdy = dFdy(sp);
+          vec3 r1 = cross(sdy, normal), r2 = cross(normal, sdx);
+          float det = dot(sdx, r1);
+          float bh = treadBump(vTW.xz);
+          vec3 grad = sign(det) * (dFdx(bh) * r1 + dFdy(bh) * r2);
+          normal = normalize(abs(det) * normal - grad * nk);
+        }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         {
           vec2 p = vTW.xz;
@@ -187,10 +238,16 @@ function draped(params) {
           float n = vnoise(p * 1.7) * 0.6 + vnoise(p * 6.0) * 0.4;
           if (e > 0.72 + n * 0.32) discard;                     // ragged edges
           float road = vSide.y;
-          // worn tread: a dark line down the middle of a trail, two ruts on a road
-          float worn = road > 0.5 ? smoothstep(0.16, 0.0, abs(e - 0.5)) : smoothstep(0.5, 0.0, e);
-          diffuseColor.rgb *= 1.0 - worn * 0.14 + (n - 0.5) * 0.25;
-          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.8, 0.9, 0.7), smoothstep(0.55, 0.95, e) * 0.6);
+          vec2 ld = normalize(vLat + 1e-5), ad = vec2(-ld.y, ld.x);
+          float uA = dot(p, ad), vL = dot(p, ld);
+          // scuffs and footfall streaks lie along the way, finer across it
+          float streak = vnoise(vec2(uA * 0.55, vL * 8.0)) * 0.55 + vnoise(vec2(uA * 2.1, vL * 21.0)) * 0.45;
+          float mid = 1.0 - smoothstep(0.0, 0.85, e);
+          // worn tread: packed, paler soil down the middle of a trail (two ruts on a road), darker duff and moss at the edges
+          float worn = road > 0.5 ? smoothstep(0.16, 0.0, abs(e - 0.5)) : mid;
+          float grain = vnoise(p * 45.0), clod = vnoise(p * 5.0);
+          diffuseColor.rgb *= (mix(0.72, 1.0 + 0.2 * worn, road > 0.5 ? 1.0 : mid) * (0.82 + streak * 0.3) + (n - 0.5) * 0.2) * (0.8 + grain * 0.4) * (0.78 + clod * 0.44);
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.78, 0.9, 0.68), smoothstep(0.5, 0.95, e) * 0.7);
           float nearK = 1.0 - smoothstep(10.0, 45.0, camD);
           if (nearK > 0.0) {
             // grit and scattered gravel, sizes all over the place, low contrast like real tread
@@ -198,56 +255,66 @@ function draped(params) {
             vec4 v = worley(p / 0.19 + 3.3);
             float grit = smoothstep(0.45 * w.y + 0.1, 0.05, w.x) * step(w.y, 0.6);
             float peb = smoothstep(0.32 * v.y + 0.08, 0.04, v.x) * step(v.y, mix(0.22, 0.4, road));
-            diffuseColor.rgb *= 1.0 + (grit * (w.y - 0.4) * 0.35 + peb * (v.y - 0.15) * 0.6) * nearK;
+            diffuseColor.rgb *= 1.0 + (grit * (w.y - 0.4) * 0.6 + peb * (v.y - 0.15) * 1.0) * nearK;
+            // fallen needles and flecks of bark lying across the tread, darker in the dip's edges
+            float fleck = smoothstep(0.86, 0.95, vnoise(vec2(uA * 52.0, vL * 38.0))) * smoothstep(0.1, 0.8, e);
+            diffuseColor.rgb *= 1.0 - fleck * 0.3 * nearK;
           }
         }`);
   };
-  mat.customProgramCacheKey = () => 'rawah-draped';
+  mat.customProgramCacheKey = () => (terrain ? 'rawah-draped2' : 'rawah-draped-flat');
   return mat;
 }
 
 const CHUNK_M = 1000;
-const ROAD = [0.24, 0.205, 0.15];   // linear space: reads as packed grey-brown gravel
+const ROAD = [0.26, 0.225, 0.17];   // linear space: reads as packed grey-brown gravel
+const ACROSS = 5;                   // vertices across a ribbon, so the tread's dip and banks show in it
 
-export function buildTrails(world) {
+export function buildTrails(world, terrain) {
   const group = new THREE.Group();
-  const mat = draped({ vertexColors: true });
+  const mat = draped({ vertexColors: true }, terrain);
   const geos = [];
-  const tones = { road: ROAD, track: [0.15, 0.12, 0.085], trail: [0.13, 0.095, 0.06] };
+  const tones = { road: ROAD, track: [0.23, 0.185, 0.13], trail: [0.22, 0.165, 0.11] };
   for (const t of world.trails) {
     if (!t.width) continue;
-    const pts = t.dense, half = t.width / 2;
-    const pos = new Float32Array(pts.length * 2 * 3), col = new Float32Array(pts.length * 2 * 3), nor = new Float32Array(pts.length * 2 * 3);
-    const side = new Float32Array(pts.length * 2 * 2);
-    for (let i = 0; i < pts.length; i++) {
-      const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+    // about a metre between rows: the dense line (2.5 m, 4 m on roads) halved
+    const src = t.dense, pts = [];
+    for (let i = 0; i < src.length; i++) {
+      pts.push(src[i]);
+      if (i < src.length - 1) pts.push([(src[i][0] + src[i + 1][0]) / 2, (src[i][1] + src[i + 1][1]) / 2]);
+    }
+    const half = t.width / 2, n = pts.length, V = n * ACROSS;
+    const pos = new Float32Array(V * 3), col = new Float32Array(V * 3), side = new Float32Array(V * 2), lat = new Float32Array(V * 2);
+    for (let i = 0; i < n; i++) {
+      const a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)];
       let dx = b[0] - a[0], dz = b[1] - a[1];
       const len = Math.hypot(dx, dz) || 1;
       dx /= len; dz /= len;
-      const wob = 1 + (hash2(i, 3, 9) - 0.5) * 0.35;
-      for (let s = 0; s < 2; s++) {
-        const sign = s ? 1 : -1;
-        const x = pts[i][0] - dz * half * wob * sign, z = pts[i][1] + dx * half * wob * sign;
-        const k = (i * 2 + s) * 3;
-        pos[k] = x; pos[k + 1] = world.height(x, z) + 0.05; pos[k + 2] = z;
-        nor[k + 1] = 1;
-        side[(i * 2 + s) * 2] = s; side[(i * 2 + s) * 2 + 1] = t.kind === 'road' ? 1 : 0;
+      const wob = 1 + (hash2(i >> 1, 3, 9) - 0.5) * 0.35;
+      const y = world.height(pts[i][0], pts[i][1]);   // only for the chunk bounds: the shader lays the real height
+      for (let s = 0; s < ACROSS; s++) {
+        const f = s / (ACROSS - 1), o = (f - 0.5) * 2;
+        const k = (i * ACROSS + s);
+        pos[k * 3] = pts[i][0] - dz * half * wob * o; pos[k * 3 + 1] = y; pos[k * 3 + 2] = pts[i][1] + dx * half * wob * o;
+        side[k * 2] = f; side[k * 2 + 1] = t.kind === 'road' ? 1 : 0;
+        lat[k * 2] = -dz; lat[k * 2 + 1] = dx;
         const v = 0.9 + hash2(i, s, 5) * 0.2, base = tones[t.kind];
-        col[k] = base[0] * v; col[k + 1] = base[1] * v; col[k + 2] = base[2] * v;
+        col[k * 3] = base[0] * v; col[k * 3 + 1] = base[1] * v; col[k * 3 + 2] = base[2] * v;
       }
     }
     const idx = [];
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
-      idx.push(a, b, c, b, d, c);
+    for (let i = 0; i < n - 1; i++) {
+      for (let s = 0; s < ACROSS - 1; s++) {
+        const a = i * ACROSS + s, b = a + 1, c = a + ACROSS, d = c + 1;
+        idx.push(a, b, c, b, d, c);
+      }
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
     geo.setAttribute('aSide', new THREE.BufferAttribute(side, 2));
+    geo.setAttribute('aLat', new THREE.BufferAttribute(lat, 2));
     geo.setIndex(idx);
-    geo.computeVertexNormals();
     geos.push(geo);
   }
   // all the trails and roads as ~1 km chunks, so the ones off screen or behind a ridge cost nothing
