@@ -5,7 +5,7 @@ import { Character } from './character.js';
 import { buildCanteen, buildBladder, buildPot, buildStraw, buildRadio, buildFilter } from './gear.js';
 import { sampleKeys, deltasFromClip } from './posebake.js';
 
-// The pose editor: developer tools, local host only (F3 toggles it, or the pose editor item on the quick bar).
+// The pose editor: developer tools, local host only (F3 or Option + P toggles it, or the pose editor item on the quick bar).
 //   Pick a character, click one of the dots on its skeleton (or a name in the list) and turn it with the gizmo or the three
 //   sliders. Joints are held to human ranges so a pose can't twist the mesh into a candy wrapper: every bone has a swing cone
 //   and a limit on how far it may twist about its own length, the elbows and knees only bend the way they do, and a dot turns
@@ -593,7 +593,7 @@ export class Poser {
   #ui() {
     const bar = document.createElement('div');
     bar.className = 'ed-bar hidden';
-    bar.innerHTML = '<b>Pose editor</b><span id="pz-status"></span><span class="sep"></span><button id="pz-close">Close <kbd>F3</kbd></button>';
+    bar.innerHTML = '<b>Pose editor</b><span id="pz-status"></span><span class="sep"></span><button id="pz-close">Close <kbd>⌥P</kbd></button>';
     document.body.appendChild(bar);
     this.bar = bar;
     const panel = document.createElement('div');

@@ -3,7 +3,7 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { renderIcons } from './icons.js';
 import { itemKey } from './flora.js';
 
-// The world editor: developer tools, local host only (F2 toggles it).
+// The world editor: developer tools, local host only (F2 or Option + E toggles it).
 //   fly      WASD to move, Space or E up, Q down, Shift faster, scroll sets the speed; hold the right mouse button and drag to look.
 //   palette  every placeable asset (trees, rocks, logs) in a panel; [2] place mode puts the chosen one where the cursor meets the
 //            ground; [1] select mode picks a placed asset and gives it a gizmo (T move, R rotate, Y scale) and a number panel;

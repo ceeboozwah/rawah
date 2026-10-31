@@ -525,7 +525,10 @@ if (DEV) poser = new Poser({ renderer, camera, scene, world, hiker, lib: avatar.
 if (isTouch) input.enableTouch(document.body);
 const recorder = new Recorder({ canvas: renderer.domElement, audio, hud, pause: () => { if (state.started && !state.paused) pause(true); }, resume: () => pause(false) });
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.started && !state.paused) pause(true); });
+// a Mac's F keys are brightness and volume unless Fn is held, so the developer tools also answer to Option + a letter
+const ALT_KEYS = { KeyE: 'F2', KeyP: 'F3', KeyF: 'F4' };
 input.onPress = (code) => {
+  if (DEV && (keys.has('AltLeft') || keys.has('AltRight')) && ALT_KEYS[code]) code = ALT_KEYS[code];
   if (code === 'F2' && editor && state.started && !state.paused && !state.intro && !state.travel && !map.open && !invOpen) { poser?.toggle(false); editor.toggle(); return; }
   if (code === 'F4' && perfhud) { perfhud.toggle(); return; }
   if (code === 'F3' && poser && state.started && !state.paused && !state.intro && !state.travel && !map.open && !invOpen) { editor?.toggle(false); poser.toggle(); return; }
