@@ -45,6 +45,7 @@ import { Inventory, InventoryUI, ITEMS } from './inventory.js';
 import { Placements } from './placements.js';
 import { Editor } from './editor.js';
 import { Poser } from './poser.js';
+import { PerfHud } from './perfhud.js';
 import { Net, normCode } from './net.js';
 import { renderIcons } from './icons.js';
 import { buildTool } from './tools.js';
@@ -256,7 +257,7 @@ if (forbs) scene.add(forbs.mesh, shrubs.mesh);
 // hand-placed assets (data/placements.json, made with the world editor) and, on a local host, the editor itself (F2)
 const placements = new Placements(world, flora, scene, { models });
 await placements.load();
-let editor = null, poser = null;
+let editor = null, poser = null, perfhud = null;
 const boxels = new Boxels(world, { n: 512 });
 BOXEL.value = boxels.texture;
 let bxLast = null, bxAcc = 0, bxRain = 0;
@@ -519,12 +520,14 @@ function friendFrame(r, dt) {
 }
 for (const o of [fireworks, coffee, breakfast, props, fishing, wood]) o.onAct = (k, d) => net.event(k, d);
 if (DEV) editor = new Editor({ renderer, camera, scene, world, flora, placements, keys, toast: (t, k) => hud.toast(t, k), mind });
+if (DEV) perfhud = new PerfHud(renderer);
 if (DEV) poser = new Poser({ renderer, camera, scene, world, hiker, lib: avatar.lib, keys, toast: (t, k) => hud.toast(t, k) });
 if (isTouch) input.enableTouch(document.body);
 const recorder = new Recorder({ canvas: renderer.domElement, audio, hud, pause: () => { if (state.started && !state.paused) pause(true); }, resume: () => pause(false) });
 document.addEventListener('visibilitychange', () => { if (document.hidden && state.started && !state.paused) pause(true); });
 input.onPress = (code) => {
   if (code === 'F2' && editor && state.started && !state.paused && !state.intro && !state.travel && !map.open && !invOpen) { poser?.toggle(false); editor.toggle(); return; }
+  if (code === 'F4' && perfhud) { perfhud.toggle(); return; }
   if (code === 'F3' && poser && state.started && !state.paused && !state.intro && !state.travel && !map.open && !invOpen) { editor?.toggle(false); poser.toggle(); return; }
   if (poser?.active && poser.onKey(code)) return;
   if (editor?.active && editor.onKey(code)) return;
@@ -2021,6 +2024,7 @@ function tick(dt, draw = true) {
     }
   }
   const zoom = mindOn ? 0 : wheel;
+  perfhud?.mark('sim');
   let focus = p;
   if (state.intro) {
     // the opening: the camera belongs to the cinematic; stream trees and shadows around what it is watching
@@ -2055,13 +2059,16 @@ function tick(dt, draw = true) {
     flora.update(p, floraTimer > 0.12 ? 1 : 0, dt);
     if (floraTimer > 0.12) floraTimer = 0;
   }
+  perfhud?.mark('flora');
   eye.copy(camera.position);
   if (!editor?.active && !poser?.active) placements.update(camera);
   net.update(dt, camera);
   fishing.ghostUpdate(dt, (id) => net.remotes.get(id)?.b);
 
   camera.updateMatrixWorld();
+  perfhud?.mark('net');
   terrain.update(camera);
+  perfhud?.mark('terrain');
   // weather: eases toward the day's schedule; lightning, rain on you, warnings
   weather.update(state.paused ? 0 : dt, gameMin, state.day, state.hour, tempC(state.hour, p.y) - weather.temp, smoothstep(-0.05, 0.3, sky.sunDir.y), freezingLevel(state.hour));
   cloudSim.update(state.paused ? 0 : dt, state.paused ? 0 : gameMin * 60, weather, sky.sunDir.y);
@@ -2219,15 +2226,20 @@ function tick(dt, draw = true) {
       peaksFound: peaks.filter((q) => state.discovered.has(`peak:${q.name}`)).length, peaksTotal: peaks.length,
     });
   }
+  perfhud?.mark('world');
   if (map.open && hudState) map.draw(hudState);
   if (state.started && (frameNo++ % 30 === 0)) { feedFriends(p); feedGuide(p); }
   // the sun's shadows only change slowly: redraw them every other frame (always while flying)
   perf.frame++;
   renderer.shadowMap.needsUpdate = settings.shadows && (perf.frame % 2 === 0 || !!state.travel || !!state.intro);
   if (draw) {
+    perfhud?.mark('hud');
     clouds.render(renderer, camera);
+    perfhud?.mark('clouds');
     mirror.update({ scene, camera, hide: [lakes.group, streams.group, grass.mesh, ...(forbs ? [forbs.mesh, shrubs.mesh] : []), shafts.mesh, leafFall.meshes[0], leafFall.meshes[1], leafFall.meshes[2], leafFall.meshes[3]], atmosphere: (cam) => updateAtmosphere(sky, cam), enabled: settings.mirror && QUALITY !== 'low' && !Q.logDepth });
+    perfhud?.mark('mirror');
     renderer.render(scene, camera);
+    perfhud?.mark('render');
   }
 }
 
@@ -2259,7 +2271,9 @@ function loop(now) {
   const dt = Math.min(0.05, raw);
   last = now;
   adapt(raw);
+  perfhud?.frame(raw);
   tick(dt);
+  perfhud?.fold();
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
