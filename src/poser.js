@@ -3,7 +3,8 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { straighten } from './anims.js';
 import { Character } from './character.js';
 import { buildCanteen, buildBladder, buildPot, buildStraw, buildRadio, buildFilter } from './gear.js';
-import { sampleKeys, deltasFromClip } from './posebake.js';
+import { sampleTracks, toTracks, deltasFromClip } from './posebake.js';
+import { Timeline } from './timeline.js';
 
 // The pose editor: developer tools, local host only (F3 or Option + P toggles it, or the pose editor item on the quick bar).
 //   Pick a character, click one of the dots on its skeleton (or a name in the list) and turn it with the gizmo or the three
@@ -87,6 +88,8 @@ function joinTwist(rv, tAng, u) {
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+const countKeys = (tracks) => Object.values(tracks || {}).reduce((n, l) => n + l.length, 0);
+
 export class Poser {
   constructor({ renderer, camera, scene, world, hiker, lib, keys, toast }) {
     Object.assign(this, { renderer, camera, scene, world, hiker, lib, keys, toast });
@@ -100,7 +103,9 @@ export class Poser {
     this.hipsDy = 0;
     this.world_ = new Map();       // bone -> world orientation of the posed bone
     this.sel = null;
-    this.frames = [];              // keyframes in the saved format
+    this.tracks = {};              // the keyframes, one track per bone and one for the hips' height (posebake.js)
+    this.flow = false;             // spline through the keys instead of stopping at each
+    this.touched = new Set(); this.hipsTouched = false;   // what the last edit changed, for auto-key
     this.t = 0; this.duration = 1; this.loop = true; this.smooth = true; this.playing = false; this.speed = 1;
     this.opts = { mirror: false, limits: true, auto: true, local: true };
     this.cam = { yaw: 0.35, pitch: 0.12, dist: 3.2, target: new THREE.Vector3() };
@@ -146,6 +151,7 @@ export class Poser {
     this.panel.classList.toggle('hidden', !on);
     this.bar.classList.toggle('hidden', !on);
     this.markers.visible = on;
+    this.tl?.show(on);
     if (on) {
       document.exitPointerLock?.();
       // the stage: a few metres in front of where the hiker stands
@@ -156,7 +162,7 @@ export class Poser {
       this.cam.target.set(this.stage.x, this.stage.y + 0.95, this.stage.z);
       this.#load(this.name);
       this.#refreshLists();
-      try { const d = JSON.parse(localStorage.getItem('rawah-pose-draft') || 'null'); if (d?.keys?.length) this.toast?.(`A draft of "${d.name}" is kept in this browser: press Restore draft in the Save row to bring it back.`); } catch { /* none */ }
+      try { const d = JSON.parse(localStorage.getItem('rawah-pose-draft') || 'null'); if (d?.tracks || d?.keys?.length) this.toast?.(`A draft of "${d.name}" is kept in this browser: press Restore draft in the Save row to bring it back.`); } catch { /* none */ }
     } else {
       this.playing = false;
       if (this.first) this.#firstPerson(false);
@@ -360,6 +366,7 @@ export class Poser {
       const n = todo.pop(), e = this.tb.get(n);
       const cur = this.D.get(n) || new THREE.Quaternion();
       this.D.set(n, new THREE.Quaternion().copy(dR).multiply(cur).normalize());
+      this.touched.add(n);
       todo.push(...e.children);
     }
   }
@@ -372,6 +379,7 @@ export class Poser {
       if (m !== n && this.tb.has(m)) {
         const d = this.D.get(n);
         if (d) this.D.set(m, mirrorQ(d, new THREE.Quaternion()).normalize()); else this.D.delete(m);
+        this.touched.add(m);
         if (this.clamped.has(n)) this.clamped.add(m); else this.clamped.delete(m);
       }
       todo.push(...e.children);
@@ -380,9 +388,9 @@ export class Poser {
 
   #reset(name) {
     if (!this.built) return;
-    if (!name) { this.#fresh(); this.clamped.clear(); this.#after(); return; }
+    if (!name) { this.#fresh(); this.clamped.clear(); for (const n of Object.keys(this.tracks)) if (n !== 'hips') this.touched.add(n); this.hipsTouched = true; this.#after(); return; }
     const todo = [name];
-    while (todo.length) { const n = todo.pop(); this.D.delete(n); this.clamped.delete(n); todo.push(...this.tb.get(n).children); }
+    while (todo.length) { const n = todo.pop(); this.D.delete(n); this.clamped.delete(n); this.touched.add(n); todo.push(...this.tb.get(n).children); }
     if (this.opts.mirror) this.#mirrorFrom(name);
     this.#poses(); this.dirty = true; this.#after();
   }
@@ -533,34 +541,78 @@ export class Poser {
     }
     // the character sits in the clear part of the screen, right of the panel
     const w = innerWidth, h = innerHeight, sh = Math.min(150, w * 0.12);
-    if (this.shift !== sh || this.vw !== w || this.vh !== h) { this.shift = sh; this.vw = w; this.vh = h; this.camera.setViewOffset(w, h, -sh, 0, w, h); }
+    const oy = Math.round((this.tl?.height || 0) * 0.5);   // the timeline takes the bottom of the screen: lift the character clear of it
+    if (this.shift !== sh || this.vw !== w || this.vh !== h || this.oy !== oy) { this.shift = sh; this.vw = w; this.vh = h; this.oy = oy; this.camera.setViewOffset(w, h, -sh, oy, w, h); }
     this.camera.updateMatrixWorld();
   }
 
   // ------------------------------------------------------------------ keyframes
+  /** Every time that carries a key on any track (just the times: tracks are what is stored). */
+  get frames() {
+    const ts = new Set();
+    for (const l of Object.values(this.tracks)) for (const k of l) ts.add(+k.t.toFixed(3));
+    return [...ts].sort((a, b) => a - b).map((t) => ({ t }));
+  }
+
   #sample(t) {
     const out = new Map();
-    const dy = sampleKeys(this.frames, t, this.duration, this.loop, this.smooth, out);
+    const dy = sampleTracks(this.tracks, t, this.duration, this.loop, this.smooth, this.flow, out);
     this.D = out; this.hipsDy = dy; this.#poses(); this.dirty = true;
   }
 
-  #poseKey() {
-    const rot = {};
-    for (const [n, q] of this.D) if (Math.abs(q.w) < 0.999995) rot[n] = [q.x, q.y, q.z, q.w].map((v) => +v.toFixed(5));
-    return { t: +this.t.toFixed(3), hips: +this.hipsDy.toFixed(2), rot };
+  #putKey(name, t) {
+    const list = this.tracks[name] || (this.tracks[name] = []), q = this.D.get(name);
+    const arr = q ? [q.x, q.y, q.z, q.w].map((v) => +v.toFixed(5)) : [0, 0, 0, 1], t3 = +t.toFixed(3);
+    const i = list.findIndex((k) => Math.abs(k.t - t3) < 0.0015);
+    if (i >= 0) list[i].q = arr; else { list.push({ t: t3, q: arr }); list.sort((a, b) => a.t - b.t); }
   }
 
-  #key() {
+  #putHips(t) {
+    const list = this.tracks.hips || (this.tracks.hips = []), t3 = +t.toFixed(3), v = +this.hipsDy.toFixed(2);
+    const i = list.findIndex((k) => Math.abs(k.t - t3) < 0.0015);
+    if (i >= 0) list[i].v = v; else { list.push({ t: t3, v }); list.sort((a, b) => a.t - b.t); }
+  }
+
+  /** A bone and everything below it that is posed or animated (they turn together, so they are keyed together). */
+  #subtree(name) {
+    const out = [], todo = [name];
+    while (todo.length) { const n = todo.pop(), e = this.tb.get(n); if (!e) continue; if (n === name || this.D.has(n) || this.tracks[n]) out.push(n); todo.push(...e.children); }
+    return out;
+  }
+
+  /** Key the selected bone (and what hangs off it) at the playhead, or the whole pose with `all` or when nothing is selected. */
+  #key(all = false) {
     if (!this.built) return;
-    const k = this.#poseKey();
-    const i = this.frames.findIndex((f) => Math.abs(f.t - k.t) < 0.02);
-    if (i >= 0) this.frames[i] = k; else { this.frames.push(k); this.frames.sort((a, b) => a.t - b.t); }
+    if (all || !this.sel) {
+      for (const n of new Set([...this.D.keys(), ...Object.keys(this.tracks).filter((k) => k !== 'hips')])) this.#putKey(n, this.t);
+      this.#putHips(this.t);
+    } else {
+      const names = new Set(this.#subtree(this.sel));
+      if (this.opts.mirror && mirrorName(this.sel) !== this.sel && this.tb.has(mirrorName(this.sel))) for (const n of this.#subtree(mirrorName(this.sel))) names.add(n);
+      for (const n of names) this.#putKey(n, this.t);
+    }
     this.#refreshKeys();
   }
 
+  /** From the timeline: key these tracks (null: the whole pose) at time t from the pose as it stands there. */
+  #addKeys(names, t) {
+    if (!this.built) return;
+    if (Object.keys(this.tracks).length) this.#sample(t);
+    const was = this.t; this.t = t;
+    if (!names) this.#key(true);
+    else { for (const n of names) { if (n === 'hips') this.#putHips(t); else if (this.tb.has(n)) this.#putKey(n, t); } this.#refreshKeys(); }
+    this.t = was;
+    this.#goto(t);
+  }
+
   #delKey() {
-    const i = this.frames.findIndex((f) => Math.abs(f.t - this.t) < 0.02);
-    if (i >= 0) { this.frames.splice(i, 1); this.#refreshKeys(); }
+    if (this.tl.deleteSelected()) return;
+    let n = 0;
+    for (const name of Object.keys(this.tracks)) {
+      const list = this.tracks[name], i = list.findIndex((k) => Math.abs(k.t - this.t) < 0.02);
+      if (i >= 0) { list.splice(i, 1); n++; if (!list.length) delete this.tracks[name]; }
+    }
+    if (n) this.#refreshKeys();
   }
 
   #play(on) {
@@ -572,13 +624,18 @@ export class Poser {
 
   /** After any edit: write it into the key under the playhead if auto-key is on. */
   #after() {
-    if (this.opts.auto && this.frames.some((f) => Math.abs(f.t - this.t) < 0.02)) this.#key();
+    if (this.opts.auto && (this.touched.size || this.hipsTouched)) {
+      for (const n of this.touched) this.#putKey(n, this.t);
+      if (this.hipsTouched) this.#putHips(this.t);
+      this.#refreshKeys();
+    }
+    this.touched.clear(); this.hipsTouched = false;
     this.#refreshSel();
   }
 
   #goto(t) {
     this.t = Math.min(this.duration, Math.max(0, t));
-    if (this.frames.length) this.#sample(this.t);
+    if (Object.keys(this.tracks).length) this.#sample(this.t);
     this.#syncTime();
     this.#refreshKeys();
     this.#refreshSel();
@@ -591,6 +648,9 @@ export class Poser {
     const out = new Map();
     this.hipsDy = deltasFromClip(clip, this.lib.srcRest, t, out);
     this.D = new Map([...out].filter(([n, q]) => this.tb.has(n) && Math.abs(q.w) < 0.999995));
+    for (const n of this.D.keys()) this.touched.add(n);
+    for (const n of Object.keys(this.tracks)) if (n !== 'hips') this.touched.add(n);
+    this.hipsTouched = true;
     this.clamped.clear();
     this.#poses(); this.dirty = true;
     this.#after();
@@ -599,9 +659,11 @@ export class Poser {
   #importClip(name, step) {
     const clip = this.lib.get(name);
     if (!clip || !this.lib.srcRest) { this.toast?.('That clip is not loaded yet.'); return; }
-    this.frames = []; this.duration = +clip.duration.toFixed(2); this.loop = true;
-    const old = this.t;
-    for (let t = 0; t < clip.duration - 0.01; t += step) { this.t = +t.toFixed(3); this.#fromClip(name, t); this.#key(); }
+    this.tracks = {}; this.duration = +clip.duration.toFixed(2); this.loop = true;
+    const old = this.t, auto = this.opts.auto;
+    this.opts.auto = false;
+    for (let t = 0; t < clip.duration - 0.01; t += step) { this.t = +t.toFixed(3); this.#fromClip(name, t); this.#key(true); }
+    this.opts.auto = auto;
     this.t = old;
     this.#goto(0);
     this.#syncUi();
@@ -610,13 +672,13 @@ export class Poser {
   // ------------------------------------------------------------------ saving
   #payload() {
     const name = this.nameInput.value.trim().replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 40);
-    return { version: 1, name, duration: this.duration, loop: this.loop, smooth: this.smooth, keys: this.frames, ...(this.held ? { held: this.held } : {}) };
+    return { version: 2, name, duration: this.duration, loop: this.loop, smooth: this.smooth, flow: this.flow, tracks: this.tracks, ...(this.held ? { held: this.held } : {}) };
   }
 
   /** A copy of the animation as a file in the browser's Downloads, independent of the dev server. */
   #download() {
     const data = this.#payload();
-    if (!data.name || !data.keys.length) { this.toast?.('Nothing to download yet.', 'warn'); return; }
+    if (!data.name || !countKeys(data.tracks)) { this.toast?.('Nothing to download yet.', 'warn'); return; }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
     a.download = `${data.name}.json`;
@@ -627,7 +689,7 @@ export class Poser {
   /** Every couple of seconds the work in progress is kept in this browser, so a closed tab or a failed save never loses it. */
   #autosave() {
     const data = this.#payload();
-    if (!data.keys.length) return;
+    if (!countKeys(data.tracks)) return;
     const text = JSON.stringify(data);
     if (text === this.lastDraft) return;
     this.lastDraft = text;
@@ -637,12 +699,13 @@ export class Poser {
   #restoreDraft() {
     try {
       const d = JSON.parse(localStorage.getItem('rawah-pose-draft') || 'null');
-      if (!d?.keys?.length) { this.toast?.('No draft kept in this browser.', 'warn'); return; }
+      if (!d || !(d.tracks ? countKeys(d.tracks) : d.keys?.length)) { this.toast?.('No draft kept in this browser.', 'warn'); return; }
       this.held = d.held || null; this.#applyHeld(); this.#syncHeld();
-      this.frames = d.keys; this.duration = d.duration || 1; this.loop = d.loop !== false; this.smooth = d.smooth !== false;
+      this.tracks = toTracks(d); this.duration = d.duration || 1; this.loop = d.loop !== false; this.smooth = d.smooth !== false; this.flow = !!d.flow;
       this.nameInput.value = d.name || 'draft';
+      this.tl.clearSelection();
       this.#goto(0); this.#syncUi();
-      this.toast?.(`Restored the draft "${d.name}" (${d.keys.length} keys). Save it to put it on disk.`);
+      this.toast?.(`Restored the draft "${d.name}" (${countKeys(this.tracks)} keys). Save it to put it on disk.`);
     } catch { this.toast?.('Could not read the draft.', 'warn'); }
   }
 
@@ -656,9 +719,9 @@ export class Poser {
       if (!r.ok) throw new Error(r.status);
       // read it back: only say saved once the file on disk really holds these keys
       const back = await (await fetch(`data/anims/${encodeURIComponent(name)}.json`, { cache: 'no-store' })).json();
-      if (!back.keys || back.keys.length !== data.keys.length) throw new Error('the file on disk does not match');
+      if (!back.tracks || countKeys(back.tracks) !== countKeys(data.tracks) || Object.keys(back.tracks).length !== Object.keys(data.tracks).length) throw new Error('the file on disk does not match');
       this.savedName = name;
-      this.toast?.(`Saved and checked: data/anims/${name}.json (${back.keys.length} keys). A copy is in your Downloads too.`);
+      this.toast?.(`Saved and checked: data/anims/${name}.json (${countKeys(back.tracks)} keys on ${Object.keys(back.tracks).length} tracks). A copy is in your Downloads too.`);
       this.#refreshLists();
     } catch (err) { this.toast?.(`NOT saved to the project: ${err.message}. A copy went to your Downloads and the draft is kept in this browser. Is the dev server running?`, 'warn'); }
   }
@@ -667,8 +730,9 @@ export class Poser {
     try {
       const d = await (await fetch(`data/anims/${encodeURIComponent(name)}.json`, { cache: 'no-store' })).json();
       this.held = d.held || null; this.#applyHeld(); this.#syncHeld();
-      this.frames = d.keys || []; this.duration = d.duration || 1; this.loop = d.loop !== false; this.smooth = d.smooth !== false;
+      this.tracks = toTracks(d); this.duration = d.duration || 1; this.loop = d.loop !== false; this.smooth = d.smooth !== false; this.flow = !!d.flow;
       this.nameInput.value = d.name || name;
+      this.tl.clearSelection();
       this.#goto(0); this.#syncUi();
     } catch { this.toast?.('Could not read that animation.', 'warn'); }
   }
@@ -729,13 +793,13 @@ export class Poser {
       <details class="ed-sec"><summary>Bones</summary><div id="pz-bones"></div></details>
       <details class="ed-sec" open><summary>Timeline</summary>
         <div class="pz-sl"><span>Time</span><input type="range" id="pz-t" min="0" max="1" step="0.01"><output id="pz-to"></output></div>
-        <div class="pz-row"><button id="pz-play">Play</button><button id="pz-key">Key here <kbd>K</kbd></button><button id="pz-del">Delete key</button></div>
-        <div id="pz-keys" class="pz-keys"></div>
+        <div class="pz-row"><button id="pz-play">Play</button><button id="pz-key">Key bone <kbd>K</kbd></button><button id="pz-keyall">Key all</button><button id="pz-del">Delete <kbd>Del</kbd></button></div>
+        <small>The keys are on the timeline below: a row for each body part, opening into its bones.</small>
         <div class="ed-grid">
           <label class="ed-note">Length (s)<input type="number" id="pz-dur" min="0.2" max="20" step="0.1" value="1"></label>
           <label class="ed-note">Speed<input type="number" id="pz-speed" min="0.1" max="3" step="0.1" value="1"></label>
         </div>
-        <div class="ed-opts"><label><input type="checkbox" id="pz-loop" checked> Loop</label><label><input type="checkbox" id="pz-smooth" checked> Smooth</label><label><input type="checkbox" id="pz-auto" checked> Auto-key</label></div>
+        <div class="ed-opts"><label><input type="checkbox" id="pz-loop" checked> Loop</label><label><input type="checkbox" id="pz-smooth" checked> Smooth</label><label title="A spline through the keys, so the motion does not stop at each one"><input type="checkbox" id="pz-flow"> Flow</label><label><input type="checkbox" id="pz-auto" checked> Auto-key</label></div>
       </details>
       <details class="ed-sec"><summary>Start from a game clip</summary>
         <select id="pz-clip"></select>
@@ -787,15 +851,17 @@ export class Poser {
       this.#after();
     };
     for (const a of ['x', 'y', 'z']) $(a).oninput = fromSliders;
-    $('hips').oninput = (e) => { this.hipsDy = +e.target.value; this.dirty = true; $('hipso').textContent = `${this.hipsDy}`; this.#after(); };
+    $('hips').oninput = (e) => { this.hipsDy = +e.target.value; this.hipsTouched = true; this.dirty = true; $('hipso').textContent = `${this.hipsDy}`; this.#after(); };
     $('t').oninput = (e) => { this.#play(false); this.#goto(+e.target.value); };
     $('play').onclick = () => this.#play(!this.playing);
     $('key').onclick = () => this.#key();
+    $('keyall').onclick = () => this.#key(true);
     $('del').onclick = () => this.#delKey();
     $('dur').onchange = (e) => { this.duration = Math.max(0.2, +e.target.value || 1); this.#syncTime(); };
     $('speed').onchange = (e) => { this.speed = Math.max(0.1, +e.target.value || 1); };
     $('loop').onchange = (e) => { this.loop = e.target.checked; };
     $('smooth').onchange = (e) => { this.smooth = e.target.checked; };
+    $('flow').onchange = (e) => { this.flow = e.target.checked; if (this.frames.length) this.#sample(this.t); };
     $('auto').onchange = (e) => { this.opts.auto = e.target.checked; };
     $('pose').onclick = () => this.#fromClip(this.clipSel.value, +$('clipt').value || 0);
     $('import').onclick = () => this.#importClip(this.clipSel.value, Math.max(0.05, +$('clips').value || 0.15));
@@ -805,8 +871,15 @@ export class Poser {
     setInterval(() => { if (this.active) this.#autosave(); }, 2000);
     $('load').onclick = () => this.savedSel.value && this.#loadSaved(this.savedSel.value);
     this.ui = $;
-    this.keysEl = $('keys');
-    this.keysEl.onclick = (e) => { const b = e.target.closest('button[data-t]'); if (b) { this.#play(false); this.#goto(+b.dataset.t); } };
+    this.tl = new Timeline({
+      tracks: () => this.tracks,
+      groups: GROUPS.map(([title, list]) => [title, list.map((n) => `mixamorig${n}`)]),
+      time: () => this.t, duration: () => this.duration, selected: () => this.sel,
+      scrub: (t) => { this.#play(false); this.#goto(t); },
+      pick: (b) => { if (this.tb.has(b) && b !== this.sel) this.#select(b); },
+      add: (names, t) => this.#addKeys(names, t),
+      changed: () => { if (Object.keys(this.tracks).length) this.#sample(this.t); this.#refreshKeys(); },
+    });
     this.bonesEl = $('bones');
     this.bonesEl.onclick = (e) => { const b = e.target.closest('button[data-b]'); if (b) this.#select(b.dataset.b); };
   }
@@ -814,10 +887,10 @@ export class Poser {
   #ask() {
     const name = this.nameInput.value.trim();
     if (!name) { this.toast?.('Give the animation a name first.', 'warn'); return; }
-    if (!this.frames.length) { this.toast?.('Nothing to save: add a keyframe first.', 'warn'); return; }
+    if (!countKeys(this.tracks)) { this.toast?.('Nothing to save: add a keyframe first.', 'warn'); return; }
     const m = document.createElement('div');
     m.className = 'ed-modal';
-    m.innerHTML = `<div class="ed-modal-card"><h3>Are you sure you want to save?</h3><p class="ed-help">This writes <b>data/anims/${esc(name)}.json</b> with ${this.frames.length} keyframe${this.frames.length > 1 ? 's' : ''} over ${this.duration} s, replacing a file of that name.</p><div class="pz-row"><button data-y>Yes, save</button><button data-n>Cancel</button></div></div>`;
+    m.innerHTML = `<div class="ed-modal-card"><h3>Are you sure you want to save?</h3><p class="ed-help">This writes <b>data/anims/${esc(name)}.json</b> with ${countKeys(this.tracks)} key${countKeys(this.tracks) > 1 ? 's' : ''} on ${Object.keys(this.tracks).length} tracks over ${this.duration} s, replacing a file of that name.</p><div class="pz-row"><button data-y>Yes, save</button><button data-n>Cancel</button></div></div>`;
     document.body.appendChild(m);
     const close = () => m.remove();
     m.querySelector('[data-n]').onclick = close;
@@ -835,7 +908,7 @@ export class Poser {
 
   #refreshKeys() {
     this.#status();
-    this.keysEl.innerHTML = this.frames.map((f) => `<button data-t="${f.t}" class="${Math.abs(f.t - this.t) < 0.02 ? 'on' : ''}">${f.t.toFixed(2)}</button>`).join('') || '<small>no keys yet</small>';
+    this.tl?.draw();
   }
 
   #refreshSel() {
@@ -870,17 +943,18 @@ export class Poser {
     const U = this.ui;
     U('t').max = this.duration; U('t').value = this.t; U('to').textContent = `${this.t.toFixed(2)} s`;
     U('dur').value = this.duration;
+    this.tl?.draw();
   }
 
   #syncUi() {
     const U = this.ui;
-    U('loop').checked = this.loop; U('smooth').checked = this.smooth;
+    U('loop').checked = this.loop; U('smooth').checked = this.smooth; U('flow').checked = this.flow;
     this.#syncTime(); this.#refreshKeys();
   }
 
   #status() {
     const el = document.getElementById('pz-status');
     if (!el) return;
-    el.textContent = !this.active ? '' : this.built ? `${this.name} · ${this.first ? 'first person · ' : ''}${this.frames.length} key${this.frames.length === 1 ? '' : 's'}` : 'loading the model…';
+    el.textContent = !this.active ? '' : this.built ? `${this.name} · ${this.first ? 'first person · ' : ''}${countKeys(this.tracks)} key${countKeys(this.tracks) === 1 ? '' : 's'}` : 'loading the model…';
   }
 }

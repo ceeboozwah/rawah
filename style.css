@@ -809,3 +809,14 @@ button.primary.big { font-size: var(--t-md); padding: 16px 46px; border-radius: 
 .pz-sl output { text-align: right; color: var(--faint); }
 .pz-panel select { width: 100%; font: 500 var(--t-sm) var(--sans); color: var(--ink); background: rgba(255, 255, 255, 0.07); border: 1px solid var(--edge); border-radius: 8px; padding: 6px 8px; box-sizing: border-box; }
 #pz-limit { color: var(--faint); font: 500 var(--t-xs) var(--sans); }
+
+/* the pose editor's timeline (src/timeline.js): docked along the bottom, right of the panel */
+.pz-tl { position: fixed; left: 296px; right: 12px; bottom: 12px; z-index: 40; border-radius: 12px; background: var(--glass-strong); overflow: hidden; user-select: none; }
+.pz-tl canvas:first-child { display: block; width: 100%; cursor: default; }
+.pz-tlbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px; border-top: 1px solid var(--edge); font: 500 var(--t-xs) var(--sans); color: var(--dim); }
+.pz-tlbar select { width: auto; max-width: 150px; font: 500 var(--t-xs) var(--sans); color: var(--ink); background: rgba(255, 255, 255, 0.07); border: 1px solid var(--edge); border-radius: 8px; padding: 4px 6px; }
+.pz-tlbar label { display: flex; align-items: center; gap: 4px; }
+.pz-tlbar input[type=number] { width: 54px; font: 500 var(--t-xs) var(--sans); color: var(--ink); background: rgba(255, 255, 255, 0.07); border: 1px solid var(--edge); border-radius: 6px; padding: 3px 4px; }
+.pz-tlbar button { font: 500 var(--t-xs) var(--sans); color: var(--dim); background: rgba(255, 255, 255, 0.06); border: 1px solid var(--edge); border-radius: 8px; padding: 4px 9px; cursor: pointer; }
+.pz-tlbar button:hover { color: var(--ink); }
+.pz-tlbar small { color: var(--faint); margin-left: auto; }

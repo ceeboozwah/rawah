@@ -108,18 +108,36 @@ def _save_anim(self):
         d = json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)))
         name = d.get('name', '')
         assert re.fullmatch(r'[A-Za-z0-9_-]{1,40}', name)
-        assert isinstance(d.get('keys'), list) and 0 < d.get('duration', 0) <= 60
-        for k in d['keys']:
-            assert isinstance(k.get('t'), (int, float)) and isinstance(k.get('rot', {}), dict)
-            for q in k.get('rot', {}).values():
-                assert isinstance(q, list) and len(q) == 4 and all(isinstance(v, (int, float)) for v in q)
+        assert 0 < d.get('duration', 0) <= 60
+        num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
+        tracks = d.get('tracks')
+        if tracks is not None:   # version 2: one list of keys per bone, plus 'hips'
+            assert isinstance(tracks, dict) and 0 < len(tracks) <= 200
+            for tn, lst in tracks.items():
+                assert re.fullmatch(r'[A-Za-z0-9_:.-]{1,60}', tn) and isinstance(lst, list) and 0 < len(lst) <= 2000
+                for k in lst:
+                    assert num(k.get('t'))
+                    if tn == 'hips':
+                        assert num(k.get('v'))
+                    else:
+                        assert isinstance(k.get('q'), list) and len(k['q']) == 4 and all(num(v) for v in k['q'])
+                    e = k.get('e')
+                    assert e is None or e == 'hold' or (isinstance(e, list) and len(e) == 4 and all(num(v) for v in e))
+        else:   # version 1: whole-pose keys
+            assert isinstance(d.get('keys'), list)
+            for k in d['keys']:
+                assert isinstance(k.get('t'), (int, float)) and isinstance(k.get('rot', {}), dict)
+                for q in k.get('rot', {}).values():
+                    assert isinstance(q, list) and len(q) == 4 and all(isinstance(v, (int, float)) for v in q)
     except Exception:
         self.send_error(400, 'not an animation')
         return
     folder = os.path.join(ROOT, 'data', 'anims')
     os.makedirs(folder, exist_ok=True)
-    keys = ',\n'.join('  ' + json.dumps(k, separators=(',', ':')) for k in d['keys'])
-    head = json.dumps({'version': 1, 'name': name, 'duration': d['duration'], 'loop': bool(d.get('loop', True)), 'smooth': bool(d.get('smooth', True))}, separators=(',', ':'))
+    head = {'version': 2 if tracks is not None else 1, 'name': name, 'duration': d['duration'], 'loop': bool(d.get('loop', True)), 'smooth': bool(d.get('smooth', True))}
+    if tracks is not None:
+        head['flow'] = bool(d.get('flow', False))
+    head = json.dumps(head, separators=(',', ':'))
     held = d.get('held')
     if held is not None:
         ok = isinstance(held, dict) and isinstance(held.get('p'), list) and len(held['p']) == 3 and isinstance(held.get('q'), list) and len(held['q']) == 4
@@ -127,7 +145,12 @@ def _save_anim(self):
             self.send_error(400, 'bad grip')
             return
         head = head[:-1] + ',"held":' + json.dumps({'p': held['p'], 'q': held['q']}, separators=(',', ':')) + '}'
-    text = head[:-1] + ',\n"keys":[\n' + keys + '\n]}\n'
+    if tracks is not None:   # one track per line, so a diff reads well
+        body = ',\n'.join('  ' + json.dumps(tn) + ':' + json.dumps(lst, separators=(',', ':')) for tn, lst in tracks.items())
+        text = head[:-1] + ',\n"tracks":{\n' + body + '\n}}\n'
+    else:
+        keys = ',\n'.join('  ' + json.dumps(k, separators=(',', ':')) for k in d['keys'])
+        text = head[:-1] + ',\n"keys":[\n' + keys + '\n]}\n'
     path = os.path.join(folder, name + '.json')
     # every save also lands in tools/.cache/anim-backups with a timestamp, so a deleted or overwritten animation can be got back
     import time
