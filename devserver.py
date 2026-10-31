@@ -120,6 +120,13 @@ def _save_anim(self):
     os.makedirs(folder, exist_ok=True)
     keys = ',\n'.join('  ' + json.dumps(k, separators=(',', ':')) for k in d['keys'])
     head = json.dumps({'version': 1, 'name': name, 'duration': d['duration'], 'loop': bool(d.get('loop', True)), 'smooth': bool(d.get('smooth', True))}, separators=(',', ':'))
+    held = d.get('held')
+    if held is not None:
+        ok = isinstance(held, dict) and isinstance(held.get('p'), list) and len(held['p']) == 3 and isinstance(held.get('q'), list) and len(held['q']) == 4
+        if not ok or not all(isinstance(v, (int, float)) for v in held['p'] + held['q']):
+            self.send_error(400, 'bad grip')
+            return
+        head = head[:-1] + ',"held":' + json.dumps({'p': held['p'], 'q': held['q']}, separators=(',', ':')) + '}'
     text = head[:-1] + ',\n"keys":[\n' + keys + '\n]}\n'
     path = os.path.join(folder, name + '.json')
     with open(path + '.tmp', 'w') as f:

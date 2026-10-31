@@ -104,6 +104,8 @@ export class Poser {
     this.t = 0; this.duration = 1; this.loop = true; this.smooth = true; this.playing = false; this.speed = 1;
     this.opts = { mirror: false, limits: true, auto: true, local: true };
     this.cam = { yaw: 0.35, pitch: 0.12, dist: 3.2, target: new THREE.Vector3() };
+    this.held = null;                   // where the thing in the hand sits against the grip: { p: metres in hand space, q }
+    this.itemSel = null;                // the gizmo is on the held item ('translate' or 'rotate'), not a bone
     this.first = false;                 // the view from the character's own eyes
     this.look = { yaw: 0, pitch: -0.4 };
     this.stage = new THREE.Vector3();
@@ -265,6 +267,8 @@ export class Poser {
     const make = ITEMS[this.tool];
     c.setTool?.(make ? 'fists' : this.tool);
     c.setItem?.(make ? make() : null);
+    if (this.itemSel && !this.#heldObj()) this.#select(null);
+    this.held = null; this.#applyHeld(); this.#syncHeld();
   }
 
   // ------------------------------------------------------------------ the pose
@@ -382,7 +386,8 @@ export class Poser {
 
   // ------------------------------------------------------------------ picking and the gizmo
   #select(name) {
-    this.sel = name;
+    this.sel = name; this.itemSel = null;
+    this.controls.setMode('rotate');
     const on = !!name && this.active;
     this.controls.enabled = on && !this.playing; this.controls.visible = on && !this.playing;
     if (name) { this.controls.attach(this.proxy); this.#toProxy(); }
@@ -391,7 +396,47 @@ export class Poser {
     this.#refreshBones();
   }
 
+  /** Put the gizmo on the thing in the hand: it moves or turns in the hand's space, and goes where the hand goes. */
+  #selectItem(mode) {
+    if (!this.#heldObj()) { this.toast?.('Put something in the hand first (In hand).'); return; }
+    this.sel = null; this.itemSel = mode;
+    this.controls.setMode(mode);
+    this.controls.enabled = this.controls.visible = this.active && !this.playing;
+    this.controls.attach(this.proxy);
+    this.#toProxy();
+    this.#refreshSel(); this.#refreshBones();
+  }
+
+  #heldObj() { return this.char?.itemObj || this.char?.toolObj || null; }
+
+  /** Seat the held thing at the grip plus the adjustment (the adjustment is in the hand bone's space, so it follows the hand). */
+  #applyHeld() {
+    const o = this.#heldObj(), g = this.char?.grip;
+    if (!o || !g) return;
+    const h = this.held || { p: [0, 0, 0], q: [0, 0, 0, 1] };
+    o.position.copy(g.pos).add(_v.set(h.p[0], h.p[1], h.p[2]).multiplyScalar(g.scale));
+    o.quaternion.fromArray(h.q).multiply(g.q);
+  }
+
+  #itemFromProxy() {
+    const hand = this.char.hand, g = this.char.grip;
+    hand.updateWorldMatrix(true, false);
+    _v.copy(this.proxy.position); hand.worldToLocal(_v);
+    hand.getWorldQuaternion(_q2);
+    _q.copy(_q2).invert().multiply(this.proxy.quaternion);
+    const off = _q.multiply(_q3.copy(g.q).invert());
+    this.held = { p: [..._v.sub(g.pos).divideScalar(g.scale).toArray()].map((v) => +v.toFixed(4)), q: off.toArray().map((v) => +v.toFixed(5)) };
+    this.#applyHeld(); this.#syncHeld();
+  }
+
   #toProxy() {
+    if (this.itemSel) {
+      const o = this.#heldObj();
+      if (!o) return;
+      o.getWorldPosition(this.proxy.position); o.getWorldQuaternion(this.proxy.quaternion);
+      this.controls.setSpace(this.itemSel === 'translate' ? 'world' : 'local');
+      return;
+    }
     const e = this.tb.get(this.sel);
     if (!e || !e.obj) return;
     e.obj.getWorldPosition(this.proxy.position);
@@ -400,6 +445,7 @@ export class Poser {
   }
 
   #fromGizmo() {
+    if (this.itemSel) { this.#itemFromProxy(); return; }
     if (!this.sel) return;
     const want = this.#setWorld(this.sel, this.proxy.quaternion.clone());
     this.proxy.quaternion.copy(want);
@@ -464,7 +510,7 @@ export class Poser {
       e.obj.getWorldPosition(e.marker.position);
       e.marker.material.color.set(e.name === this.sel ? 0xf6d3bd : this.clamped.has(e.name) ? 0xff4a3a : 0xffffff);
     }
-    if (this.sel && !this.dragging && !this.playing) this.#toProxy();
+    if ((this.sel || this.itemSel) && !this.dragging && !this.playing) this.#toProxy();
     this.focus.copy(this.stage);
   }
 
@@ -561,7 +607,7 @@ export class Poser {
   async #save() {
     const name = this.nameInput.value.trim().replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 40);
     if (!name) { this.toast?.('Give the animation a name first.', 'warn'); return; }
-    const data = { version: 1, name, duration: this.duration, loop: this.loop, smooth: this.smooth, keys: this.frames };
+    const data = { version: 1, name, duration: this.duration, loop: this.loop, smooth: this.smooth, keys: this.frames, ...(this.held ? { held: this.held } : {}) };
     try {
       const r = await fetch('/dev/anim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
       if (!r.ok) throw new Error(r.status);
@@ -574,6 +620,7 @@ export class Poser {
   async #loadSaved(name) {
     try {
       const d = await (await fetch(`data/anims/${encodeURIComponent(name)}.json`, { cache: 'no-store' })).json();
+      this.held = d.held || null; this.#applyHeld(); this.#syncHeld();
       this.frames = d.keys || []; this.duration = d.duration || 1; this.loop = d.loop !== false; this.smooth = d.smooth !== false;
       this.nameInput.value = d.name || name;
       this.#goto(0); this.#syncUi();
@@ -619,6 +666,16 @@ export class Poser {
         <div class="pz-sl"><span>Twist</span><input type="range" id="pz-z" min="-180" max="180" step="1"><output id="pz-zo"></output></div>
         <div class="pz-sl"><span>Hips up</span><input type="range" id="pz-hips" min="-30" max="15" step="0.5"><output id="pz-hipso"></output></div>
       </details>
+      <details class="ed-sec" open><summary>Held item</summary>
+        <small>Where it sits in the hand. It stays in the hand wherever the hand goes.</small>
+        <div class="pz-row"><button id="pz-imove">Move with gizmo</button><button id="pz-iturn">Turn with gizmo</button><button id="pz-ireset">Reset grip</button></div>
+        <div class="pz-sl"><span>Right</span><input type="range" id="pz-hx" min="-25" max="25" step="0.5"><output id="pz-hxo"></output></div>
+        <div class="pz-sl"><span>Up</span><input type="range" id="pz-hy" min="-25" max="25" step="0.5"><output id="pz-hyo"></output></div>
+        <div class="pz-sl"><span>Forward</span><input type="range" id="pz-hz" min="-25" max="25" step="0.5"><output id="pz-hzo"></output></div>
+        <div class="pz-sl"><span>Tilt</span><input type="range" id="pz-hrx" min="-180" max="180" step="1"><output id="pz-hrxo"></output></div>
+        <div class="pz-sl"><span>Turn</span><input type="range" id="pz-hry" min="-180" max="180" step="1"><output id="pz-hryo"></output></div>
+        <div class="pz-sl"><span>Roll</span><input type="range" id="pz-hrz" min="-180" max="180" step="1"><output id="pz-hrzo"></output></div>
+      </details>
       <details class="ed-sec"><summary>Bones</summary><div id="pz-bones"></div></details>
       <details class="ed-sec" open><summary>Timeline</summary>
         <div class="pz-sl"><span>Time</span><input type="range" id="pz-t" min="0" max="1" step="0.01"><output id="pz-to"></output></div>
@@ -654,6 +711,16 @@ export class Poser {
     $('local').onchange = (e) => { this.opts.local = e.target.checked; this.controls.setSpace(this.opts.local ? 'local' : 'world'); };
     this.fpBtn = $('fp'); $('fp').onclick = () => this.#firstPerson(!this.first);
     $('resetall').onclick = () => this.#reset(null);
+    $('imove').onclick = () => this.#selectItem('translate');
+    $('iturn').onclick = () => this.#selectItem('rotate');
+    $('ireset').onclick = () => { this.held = null; this.#applyHeld(); this.#syncHeld(); };
+    // the sliders: centimetres along the hand's axes and degrees about them
+    const fromHeld = () => {
+      const e = new THREE.Euler($('hrx').value * D2R, $('hry').value * D2R, $('hrz').value * D2R, 'XYZ');
+      this.held = { p: [$('hx').value / 100, $('hy').value / 100, $('hz').value / 100], q: new THREE.Quaternion().setFromEuler(e).toArray().map((v) => +v.toFixed(5)) };
+      this.#applyHeld(); this.#syncHeld(true);
+    };
+    for (const a of ['hx', 'hy', 'hz', 'hrx', 'hry', 'hrz']) $(a).oninput = fromHeld;
     $('resetbone').onclick = () => this.#reset(this.sel);
     // the three sliders turn the bone about its own axes: bend (about its hinge), side, and twist along its length
     const fromSliders = () => {
@@ -727,6 +794,19 @@ export class Poser {
     U('limit').textContent = lim ? (lim.hinge ? `hinge ${lim.hinge[0]}° to ${lim.hinge[1]}°, twist ±${lim.tw}°` : `swing up to ${lim.cone}°, twist ±${lim.tw}°`) : 'free';
     U('hips').value = this.hipsDy; U('hipso').textContent = `${this.hipsDy}`;
     this.#refreshBones();
+  }
+
+  /** Show the held item's adjustment on its sliders. */
+  #syncHeld(fromSliders = false) {
+    const U = this.ui;
+    if (!U) return;
+    const h = this.held || { p: [0, 0, 0], q: [0, 0, 0, 1] };
+    const e = new THREE.Euler().setFromQuaternion(_q.fromArray(h.q), 'XYZ');
+    const vals = { hx: h.p[0] * 100, hy: h.p[1] * 100, hz: h.p[2] * 100, hrx: e.x / D2R, hry: e.y / D2R, hrz: e.z / D2R };
+    for (const [k, v] of Object.entries(vals)) {
+      if (!fromSliders) U(k).value = v;
+      U(`${k}o`).textContent = k.startsWith('hr') ? `${Math.round(v)}°` : `${v.toFixed(1)} cm`;
+    }
   }
 
   #syncTime() {

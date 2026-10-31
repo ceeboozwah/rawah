@@ -211,6 +211,7 @@ export class Character {
     t.visible = !this.firstPerson;
     this.hand.add(t);
     this.toolObj = t;
+    if (this.heldAdj) this.#regrip(this.heldAdj);
   }
 
   setTool(kind) { this.tool = kind; this.#mountTool(); }
@@ -224,6 +225,7 @@ export class Character {
     obj.visible = !this.firstPerson;
     this.hand.add(obj);
     this.itemObj = obj;
+    if (this.heldAdj) this.#regrip(this.heldAdj);
   }
 
   /** A clip fitted to this skeleton, made once. */
@@ -507,5 +509,19 @@ export class Character {
     if (prev && prev !== next) next.crossFadeFrom(prev, w.fade ?? 0.2, false);
     else next.fadeIn(w.fade ?? 0.2);
     this.cur = next; this.key = w.key; this.hold = w.hold || 0;
+    this.heldAdj = clip.userData?.held;
+    this.#regrip(this.heldAdj);
+  }
+
+  /**
+   * An animation made in the pose editor can seat what is in the hand differently against the grip (`held`: p in metres and q, both in
+   * the hand bone's space, so it goes wherever the hand goes). Every other clip puts it back where the grip says.
+   */
+  #regrip(held) {
+    const o = this.itemObj || this.toolObj, g = this.grip;
+    if (!o || !g) return;
+    const h = held || { p: [0, 0, 0], q: [0, 0, 0, 1] };
+    o.position.copy(g.pos).add(_v1.set(h.p[0], h.p[1], h.p[2]).multiplyScalar(g.scale));
+    o.quaternion.fromArray(h.q).multiply(g.q);
   }
 }

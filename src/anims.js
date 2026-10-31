@@ -202,7 +202,9 @@ export class AnimLibrary {
         // a hand-made animation from the pose editor: keyframes in data/anims, baked against the Mixamo skeleton
         ? this.#one('Neutral Idle').then(async () => {
             const data = await (await fetch(`data/anims/${encodeURIComponent(name.slice(5))}.json`, { cache: 'no-store' })).json();
-            this.clips.set(name, prepare(name, bake(data, this.srcRest)));
+            const clip = prepare(name, bake(data, this.srcRest));
+            if (data.held) clip.userData.held = data.held;
+            this.clips.set(name, clip);
           })
         : name.startsWith('Chop_')
         ? new GLTFLoader().loadAsync(`${DIR}chop.glb`).then((g) => {
