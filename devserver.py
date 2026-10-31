@@ -129,6 +129,12 @@ def _save_anim(self):
         head = head[:-1] + ',"held":' + json.dumps({'p': held['p'], 'q': held['q']}, separators=(',', ':')) + '}'
     text = head[:-1] + ',\n"keys":[\n' + keys + '\n]}\n'
     path = os.path.join(folder, name + '.json')
+    # every save also lands in tools/.cache/anim-backups with a timestamp, so a deleted or overwritten animation can be got back
+    import time
+    keep = os.path.join(ROOT, 'tools', '.cache', 'anim-backups')
+    os.makedirs(keep, exist_ok=True)
+    with open(os.path.join(keep, '%s-%s.json' % (name, time.strftime('%Y%m%d-%H%M%S'))), 'w') as f:
+        f.write(text)
     with open(path + '.tmp', 'w') as f:
         f.write(text)
     os.replace(path + '.tmp', path)
