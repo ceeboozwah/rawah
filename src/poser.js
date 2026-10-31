@@ -108,6 +108,7 @@ export class Poser {
     this.itemSel = null;                // the gizmo is on the held item ('translate' or 'rotate'), not a bone
     this.first = false;                 // the view from the character's own eyes
     this.look = { yaw: 0, pitch: -0.4 };
+    this.eye = { fwd: 8, up: 10, near: 4 };   // first person: eye offset from the head bone (cm) and the near clip distance (cm)
     this.stage = new THREE.Vector3();
     this.clamped = new Set();
     this.drag = null;
@@ -155,6 +156,7 @@ export class Poser {
       this.cam.target.set(this.stage.x, this.stage.y + 0.95, this.stage.z);
       this.#load(this.name);
       this.#refreshLists();
+      try { const d = JSON.parse(localStorage.getItem('rawah-pose-draft') || 'null'); if (d?.keys?.length) this.toast?.(`A draft of "${d.name}" is kept in this browser: press Restore draft in the Save row to bring it back.`); } catch { /* none */ }
     } else {
       this.playing = false;
       if (this.first) this.#firstPerson(false);
@@ -250,6 +252,7 @@ export class Poser {
   /** Look through the character's eyes (its head is hidden so it is not in the way), or back out to the orbit view. */
   #firstPerson(on) {
     this.first = on;
+    if (!on) { this.camera.near = this.nearWas ?? this.camera.near; this.camera.updateProjectionMatrix(); } else if (this.nearWas === undefined || this.camera.near > 0.2) this.nearWas = this.camera.near;
     const head = this.tb.get('mixamorigHead')?.obj;
     if (head) {
       if (!head.userData.fpScale) head.userData.fpScale = head.scale.clone();
@@ -520,7 +523,8 @@ export class Poser {
     if (head) {
       // from the character's eyes, looking the way it faces (drag to look about)
       head.getWorldPosition(this.camera.position);
-      this.camera.position.y += 0.1; this.camera.position.z += 0.08;
+      this.camera.position.y += this.eye.up / 100; this.camera.position.z += this.eye.fwd / 100;
+      if (this.camera.near !== this.eye.near / 100) { this.camera.near = this.eye.near / 100; this.camera.updateProjectionMatrix(); }
       const lp = Math.cos(this.look.pitch);
       this.camera.lookAt(_v.set(this.camera.position.x + Math.sin(this.look.yaw) * lp, this.camera.position.y + Math.sin(this.look.pitch), this.camera.position.z + Math.cos(this.look.yaw) * lp));
     } else {
@@ -604,17 +608,59 @@ export class Poser {
   }
 
   // ------------------------------------------------------------------ saving
-  async #save() {
+  #payload() {
     const name = this.nameInput.value.trim().replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 40);
+    return { version: 1, name, duration: this.duration, loop: this.loop, smooth: this.smooth, keys: this.frames, ...(this.held ? { held: this.held } : {}) };
+  }
+
+  /** A copy of the animation as a file in the browser's Downloads, independent of the dev server. */
+  #download() {
+    const data = this.#payload();
+    if (!data.name || !data.keys.length) { this.toast?.('Nothing to download yet.', 'warn'); return; }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
+    a.download = `${data.name}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }
+
+  /** Every couple of seconds the work in progress is kept in this browser, so a closed tab or a failed save never loses it. */
+  #autosave() {
+    const data = this.#payload();
+    if (!data.keys.length) return;
+    const text = JSON.stringify(data);
+    if (text === this.lastDraft) return;
+    this.lastDraft = text;
+    try { localStorage.setItem('rawah-pose-draft', text); localStorage.setItem('rawah-pose-draft-at', String(Date.now())); } catch { /* storage full or blocked */ }
+  }
+
+  #restoreDraft() {
+    try {
+      const d = JSON.parse(localStorage.getItem('rawah-pose-draft') || 'null');
+      if (!d?.keys?.length) { this.toast?.('No draft kept in this browser.', 'warn'); return; }
+      this.held = d.held || null; this.#applyHeld(); this.#syncHeld();
+      this.frames = d.keys; this.duration = d.duration || 1; this.loop = d.loop !== false; this.smooth = d.smooth !== false;
+      this.nameInput.value = d.name || 'draft';
+      this.#goto(0); this.#syncUi();
+      this.toast?.(`Restored the draft "${d.name}" (${d.keys.length} keys). Save it to put it on disk.`);
+    } catch { this.toast?.('Could not read the draft.', 'warn'); }
+  }
+
+  async #save() {
+    const data = this.#payload(), name = data.name;
     if (!name) { this.toast?.('Give the animation a name first.', 'warn'); return; }
-    const data = { version: 1, name, duration: this.duration, loop: this.loop, smooth: this.smooth, keys: this.frames, ...(this.held ? { held: this.held } : {}) };
+    this.#autosave();
+    this.#download();   // always leave a copy in Downloads too
     try {
       const r = await fetch('/dev/anim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
       if (!r.ok) throw new Error(r.status);
+      // read it back: only say saved once the file on disk really holds these keys
+      const back = await (await fetch(`data/anims/${encodeURIComponent(name)}.json`, { cache: 'no-store' })).json();
+      if (!back.keys || back.keys.length !== data.keys.length) throw new Error('the file on disk does not match');
       this.savedName = name;
-      this.toast?.(`Saved data/anims/${name}.json · plays in the game as pose/${name}`);
+      this.toast?.(`Saved and checked: data/anims/${name}.json (${back.keys.length} keys). A copy is in your Downloads too.`);
       this.#refreshLists();
-    } catch (err) { this.toast?.(`Could not save: ${err.message}. Is the dev server running?`, 'warn'); }
+    } catch (err) { this.toast?.(`NOT saved to the project: ${err.message}. A copy went to your Downloads and the draft is kept in this browser. Is the dev server running?`, 'warn'); }
   }
 
   async #loadSaved(name) {
@@ -657,6 +703,10 @@ export class Poser {
           <label><input type="checkbox" id="pz-local" checked> Gizmo follows bone</label>
         </div>
         <div class="pz-row"><button id="pz-fp">First person view <kbd>V</kbd></button></div>
+        <small>First person: move the eye if the body gets in the way, and lower the near clip to stop it cutting off close parts.</small>
+        <div class="pz-sl"><span>Eye fwd</span><input type="range" id="pz-efwd" min="-10" max="30" step="1" value="8"><output id="pz-efwdo"></output></div>
+        <div class="pz-sl"><span>Eye up</span><input type="range" id="pz-eup" min="-10" max="25" step="1" value="10"><output id="pz-eupo"></output></div>
+        <div class="pz-sl"><span>Near clip</span><input type="range" id="pz-enear" min="1" max="40" step="1" value="4"><output id="pz-enearo"></output></div>
         <div class="pz-row"><button id="pz-resetall">Reset pose</button><button id="pz-resetbone">Reset bone <kbd>X</kbd></button></div>
       </details>
       <details class="ed-sec" open><summary>Selected bone</summary>
@@ -694,7 +744,7 @@ export class Poser {
       </details>
       <details class="ed-sec" open><summary>Save</summary>
         <input type="text" id="pz-name" placeholder="name, e.g. axe_chop">
-        <div class="pz-row"><button id="pz-save" class="ed-save">Save</button></div>
+        <div class="pz-row"><button id="pz-save" class="ed-save">Save</button><button id="pz-dl">Download .json</button><button id="pz-draft">Restore draft</button></div>
         <select id="pz-saved"></select>
         <div class="pz-row"><button id="pz-load">Open</button></div>
         <p class="ed-help">Saved to data/anims/. The game plays it as <b>pose/name</b>. Drag on empty space (or right-drag) to turn all the way round the character, Shift + right-drag pans, scroll or W/S zooms, arrow keys or A/D turn the view, click a dot to pick a bone.</p>
@@ -710,6 +760,10 @@ export class Poser {
     $('limits').onchange = (e) => { this.opts.limits = e.target.checked; if (!this.opts.limits) this.clamped.clear(); };
     $('local').onchange = (e) => { this.opts.local = e.target.checked; this.controls.setSpace(this.opts.local ? 'local' : 'world'); };
     this.fpBtn = $('fp'); $('fp').onclick = () => this.#firstPerson(!this.first);
+    for (const [id, key] of [['efwd', 'fwd'], ['eup', 'up'], ['enear', 'near']]) {
+      const f = () => { this.eye[key] = +$(id).value; $(id + 'o').textContent = `${$(id).value} cm`; };
+      $(id).oninput = f; f();
+    }
     $('resetall').onclick = () => this.#reset(null);
     $('imove').onclick = () => this.#selectItem('translate');
     $('iturn').onclick = () => this.#selectItem('rotate');
@@ -746,6 +800,9 @@ export class Poser {
     $('pose').onclick = () => this.#fromClip(this.clipSel.value, +$('clipt').value || 0);
     $('import').onclick = () => this.#importClip(this.clipSel.value, Math.max(0.05, +$('clips').value || 0.15));
     $('save').onclick = () => this.#ask();
+    $('dl').onclick = () => this.#download();
+    $('draft').onclick = () => this.#restoreDraft();
+    setInterval(() => { if (this.active) this.#autosave(); }, 2000);
     $('load').onclick = () => this.savedSel.value && this.#loadSaved(this.savedSel.value);
     this.ui = $;
     this.keysEl = $('keys');

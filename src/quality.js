@@ -29,7 +29,7 @@ export const PRESETS = {
 };
 
 /** Render scale bounds for the adaptive resolution, as fractions of the preset's pixel ratio. */
-export const SCALE = { min: 0.6, max: 1 };
+export const SCALE = { min: 0.4, max: 1 };
 
 export function resolveQuality(pref = 'auto') {
   if (PRESETS[pref]) return pref;
